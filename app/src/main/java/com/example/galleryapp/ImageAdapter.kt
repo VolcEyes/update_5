@@ -81,5 +81,13 @@ class ImageAdapter(private var context: Context, private var imagesList: ArrayLi
         return imagesList.size
     }
 
+    /**
+     * Updates the displayed list (used for live filtering).
+     */
+    fun updateList(newList: ArrayList<Image>) {
+        imagesList = newList
+        notifyDataSetChanged()
+    }
+
 
 }

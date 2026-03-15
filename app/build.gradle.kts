@@ -43,7 +43,10 @@ android {
 
 dependencies {
     implementation(libs.androidx.core.ktx)
-    implementation(libs.androidx.appcompat)
+    implementation("androidx.core:core-ktx:1.13.1")
+// Or latest version for WindowInsetsControllerCompat
+    implementation("androidx.appcompat:appcompat:1.7.1")
+// Or latest version
     implementation(libs.material)
     implementation(libs.androidx.activity)
     implementation(libs.androidx.constraintlayout)
