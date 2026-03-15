@@ -3,6 +3,7 @@ import org.gradle.kotlin.dsl.implementation
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.ksp)           // ← NEW (this replaces the old kapt)
 }
 
 android {
@@ -39,9 +40,20 @@ android {
     buildFeatures {
         compose = true
     }
+
 }
 
 dependencies {
+
+    val room_version = "2.8.4"
+
+    implementation("androidx.room:room-runtime:$room_version")
+    implementation("androidx.room:room-ktx:$room_version")
+    ksp("androidx.room:room-compiler:$room_version")
+
+// Needed for object detection (to populate the DB)
+    implementation("com.google.mlkit:object-detection-custom:17.0.2")
+
     implementation(libs.androidx.core.ktx)
     implementation("androidx.core:core-ktx:1.13.1")
 // Or latest version for WindowInsetsControllerCompat
