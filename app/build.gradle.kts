@@ -58,6 +58,8 @@ dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
 // Or latest version for WindowInsetsControllerCompat
     implementation("androidx.appcompat:appcompat:1.7.1")
+
+    implementation("androidx.cursoradapter:cursoradapter:1.0.0")
 // Or latest version
     implementation(libs.material)
     implementation(libs.androidx.activity)

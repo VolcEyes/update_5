@@ -38,6 +38,12 @@ import com.google.mlkit.common.model.LocalModel
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.objects.ObjectDetection
 import com.google.mlkit.vision.objects.custom.CustomObjectDetectorOptions
+import android.database.Cursor
+import androidx.cursoradapter.widget.SimpleCursorAdapter
+
+import androidx.appcompat.widget.SearchView.OnSuggestionListener
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 
 
 /*
@@ -54,6 +60,29 @@ class MainActivity : AppCompatActivity() {  // Κύρια κλάση δραστ�
 
     private var objectDetector: com.google.mlkit.vision.objects.ObjectDetector? = null
 
+    private var suggestionJob: Job? = null
+
+    private var suggestionsAdapter: androidx.cursoradapter.widget.SimpleCursorAdapter? = null
+
+
+    // === SYNONYMS (plate ↔ dish etc.) ===
+    private val synonymMap: Map<String, List<String>> = mapOf(
+        "plate" to listOf("plate", "dish"),
+        "dish" to listOf("dish", "plate"),
+        // ← ADD MORE HERE (example):
+        // "car" to listOf("car", "vehicle", "automobile"),
+        // "person" to listOf("person", "human")
+    )
+
+    private fun expandWithSynonyms(baseTerms: List<String>): List<String> {
+        val expanded = mutableSetOf<String>()
+        for (term in baseTerms) {
+            expanded.add(term)
+            synonymMap[term]?.let { expanded.addAll(it) }
+        }
+        return expanded.toList()
+    }
+
     private lateinit var galleryDao: GalleryDao
 
     /*
@@ -69,8 +98,11 @@ class MainActivity : AppCompatActivity() {  // Κύρια κλάση δραστ�
             applicationContext,
             AppDatabase::class.java,
             "gallery.db"
-        ).build()
+        )
+            .fallbackToDestructiveMigration()   // ← THIS IS THE FIX
+            .build()
         galleryDao = db.galleryDao()
+
 
         initializeObjectDetector()
 
@@ -161,45 +193,45 @@ class MainActivity : AppCompatActivity() {  // Κύρια κλάση δραστ�
     Η μέθοδος getAllImages επιστρέφει λίστα με όλες τις εικόνες από MediaStore.
     Χρησιμοποιεί query για ανάκτηση δεδομένων εικόνων.
     */
-    private fun getAllImages(): ArrayList<Image> {  // Ιδιωτική μέθοδος λήψης εικόνων
-        val images = ArrayList<Image>()  // Δημιουργία λίστας εικόνων
+    private fun getAllImages(): ArrayList<Image> {
+        val images = ArrayList<Image>()
 
-        val uri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI  // URI για εξωτερικές εικόνες
+        val uri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
         val projection = arrayOf(
-            MediaStore.Images.Media._ID,  // ID εικόνας
-            MediaStore.Images.Media.DISPLAY_NAME  // Όνομα εμφάνισης
+            MediaStore.Images.Media._ID,
+            MediaStore.Images.Media.DISPLAY_NAME,
+            MediaStore.Images.Media.DATE_ADDED
         )
+        val sortOrder = "${MediaStore.Images.Media.DATE_ADDED} DESC"
 
+        contentResolver.query(uri, projection, null, null, sortOrder)?.use { cursor ->
+            val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
+            val nameColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
 
-        // Το ContentResolver χρησιμοποιείται για να εκτελεί ερωτήματα(queries/requests) σε ContentProviders του Android,
-        // όπως το MediaStore, επιτρέποντας ασφαλή πρόσβαση σε δεδομένα συστήματος (π.χ. λίστα εικόνων) χωρίς άμεση χειρισμό αρχείων
-        // ή βάσεων δεδομένων.
-        contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
-            val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)  // Λήψη δείκτη στήλης ID
-            val nameColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)  // Λήψη δείκτη στήλης ονόματος
+            while (cursor.moveToNext()) {
+                val id = cursor.getLong(idColumn)
+                val name = cursor.getString(nameColumn) ?: "Untitled"
+                val contentUri = ContentUris.withAppendedId(uri, id).toString()
 
-            while (cursor.moveToNext()) {  // Βρόχος ανάγνωσης εγγραφών
-                val id = cursor.getLong(idColumn)  // Λήψη ID
-                val name = cursor.getString(nameColumn) ?: "Untitled"  // Λήψη ονόματος ή προεπιλεγμένο
-
-                val contentUri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)  // Δημιουργία URI περιεχομένου
-
-                val image = Image()  // Δημιουργία αντικειμένου Image
-                image.imagePath = contentUri.toString()   // Ορισμός διαδρομής URI εικόνας
-                image.imageTitle = name                   // Ορισμός τίτλου εικόνας
-                images.add(image)  // Προσθήκη εικόνας στη λίστα
-
-                lifecycleScope.launch(Dispatchers.IO) {
-                    galleryDao.insertImage(
-                        ImageEntity(
-                            name = name,
-                            contentUri = contentUri.toString()
-                        )
-                    )
+                val image = Image().apply {
+                    imagePath = contentUri
+                    imageTitle = name
                 }
+                images.add(image)
             }
         }
-        return images  // Επιστροφή λίστας
+
+        Log.d("GalleryApp", "✅ MediaStore returned TOTAL ${images.size} images")
+
+        // Insert ALL images into database (unique by contentUri)
+        lifecycleScope.launch(Dispatchers.IO) {
+            images.forEach { img ->
+                galleryDao.insertImage(ImageEntity(name = img.imageTitle, contentUri = img.imagePath))
+            }
+            Log.d("GalleryApp", "✅ Inserted ${images.size} images into ImagesTable")
+        }
+
+        return images
     }
 
     /*
@@ -211,15 +243,16 @@ class MainActivity : AppCompatActivity() {  // Κύρια κλάση δραστ�
      * - 2-3 words → most matched classes → total objects → highest confidence
      */
     private fun filterImages(query: String) {
-        val terms = query.trim()
+        val baseTerms = query.trim()
             .split("\\s+".toRegex())
             .map { it.lowercase().trim() }
             .filter { it.isNotEmpty() && it.length >= 2 }
             .take(3)
 
+        val terms = expandWithSynonyms(baseTerms)
+
         lifecycleScope.launch(Dispatchers.IO) {
             val sortedImages = if (terms.isEmpty()) {
-                // Normal gallery view when search is empty
                 allPictures ?: ArrayList()
             } else {
                 val dbResults = galleryDao.getSortedImages(terms)
@@ -236,32 +269,92 @@ class MainActivity : AppCompatActivity() {  // Κύρια κλάση δραστ�
     /*
     Δημιουργεί το SearchView στο action bar (σύγχρονο στυλ 2025-2026).
     */
-    /*
-    Δημιουργεί το SearchView στο action bar (σύγχρονο στυλ 2025-2026).
-    */
-    /*
-   Δημιουργεί το SearchView στο action bar (σύγχρονο στυλ 2025-2026).
-   */
-    /*
-    Δημιουργεί το SearchView στο action bar (σύγχρονο στυλ 2025-2026).
-    */
-    /*
-    Δημιουργεί το SearchView στο action bar (σύγχρονο στυλ 2025-2026).
-    */
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         menuInflater.inflate(R.menu.menu_main, menu)
 
         val searchItem = menu.findItem(R.id.action_search)
         val searchView = searchItem.actionView as SearchView
+        // === AUTOCOMPLETE SUGGESTIONS (fixed type + cast) ===
+        // === SAFE AUTOCOMPLETE WITH DEBOUNCE (prevents cursor crash on fast typing/deleting) ===
+        suggestionsAdapter = SimpleCursorAdapter(
+            this,
+            android.R.layout.simple_list_item_1,
+            null,
+            arrayOf("suggestion"),
+            intArrayOf(android.R.id.text1),
+            0
+        )
+        searchView.suggestionsAdapter = suggestionsAdapter
 
-        searchView.queryHint = "Search images (e.g. dog, mouse...)"
         searchView.setOnQueryTextListener(object : SearchView.OnQueryTextListener {
-            override fun onQueryTextSubmit(query: String?): Boolean {
-                return false
-            }
+            override fun onQueryTextSubmit(query: String?): Boolean = false
 
             override fun onQueryTextChange(newText: String?): Boolean {
-                filterImages(newText ?: "")
+                val text = newText ?: ""
+                val lastWord = text.trim().split("\\s+".toRegex()).lastOrNull() ?: ""
+
+                suggestionJob?.cancel()
+
+                if (lastWord.length >= 2) {
+                    suggestionJob = lifecycleScope.launch(Dispatchers.IO) {
+                        delay(180) // ← debounce prevents race condition
+
+                        try {
+                            val cursor = galleryDao.getSuggestions(lastWord)
+                            withContext(Dispatchers.Main) {
+                                val oldCursor = suggestionsAdapter?.cursor
+                                suggestionsAdapter?.changeCursor(cursor)
+                                oldCursor?.close() // safe close AFTER swap
+                            }
+                        } catch (e: Exception) {
+                            Log.e("GalleryApp", "Suggestion query failed", e)
+                        }
+                    }
+                } else {
+                    suggestionsAdapter?.changeCursor(null)
+                }
+
+                filterImages(text) // your smart sorting + synonyms still work
+                return true
+            }
+        })
+
+        searchView.setOnSuggestionListener(object : SearchView.OnSuggestionListener {
+            override fun onSuggestionSelect(position: Int): Boolean = false
+
+            override fun onSuggestionClick(position: Int): Boolean {
+                val cursor = searchView.suggestionsAdapter?.cursor ?: return false
+                if (cursor.isClosed) return false
+
+                cursor.moveToPosition(position)
+                val selected = cursor.getString(cursor.getColumnIndexOrThrow("suggestion"))
+
+                val current = searchView.query.toString().trim()
+                val newQuery = if (current.isEmpty() || current.endsWith(" ")) {
+                    "$current$selected "
+                } else {
+                    "$current $selected "
+                }
+                searchView.setQuery(newQuery, false)
+                return true
+            }
+        })
+        searchView.setOnSuggestionListener(object : SearchView.OnSuggestionListener {
+            override fun onSuggestionSelect(position: Int): Boolean = false
+
+            override fun onSuggestionClick(position: Int): Boolean {
+                val cursor = searchView.suggestionsAdapter?.cursor ?: return false
+                cursor.moveToPosition(position)
+                val selected = cursor.getString(cursor.getColumnIndexOrThrow("suggestion"))
+
+                val current = searchView.query.toString().trim()
+                val newQuery = if (current.isEmpty() || current.endsWith(" ")) {
+                    "$current$selected "
+                } else {
+                    "$current $selected "
+                }
+
+                searchView.setQuery(newQuery, false)
                 return true
             }
         })
@@ -353,21 +446,33 @@ class MainActivity : AppCompatActivity() {  // Κύρια κλάση δραστ�
         if (objectDetector == null || allPictures.isNullOrEmpty()) return
 
         lifecycleScope.launch(Dispatchers.IO) {
-            val imagesToProcess = allPictures!!.take(20)   // first 20 images (safe for testing)
+            val imagesToProcess = allPictures!!.take(20)   // first 20 images (safe)
 
-            Log.d("GalleryApp", "🔄 Starting object detection on ${imagesToProcess.size} images...")
+            Log.d("GalleryApp", "🔄 Starting smart indexing on ${imagesToProcess.size} images...")
 
             for (img in imagesToProcess) {
-                val uri = Uri.parse(img.imagePath)
+                val contentUri = img.imagePath
+
+                // Skip if already in DB
+                val existingId = galleryDao.getImageIdByUri(contentUri)
+                if (existingId != null && galleryDao.hasDetections(existingId)) {
+                    Log.d("GalleryApp", "⏭️ Skipping already indexed: ${img.imageTitle}")
+                    continue
+                }
+
+                val uri = Uri.parse(contentUri)
                 try {
                     val inputImage = InputImage.fromFilePath(this@MainActivity, uri)
 
-                    // Save image to DB
-                    val entity = ImageEntity(name = img.imageTitle, contentUri = img.imagePath)
+                    // Insert (or reuse existing)
+                    val entity = ImageEntity(name = img.imageTitle, contentUri = contentUri)
                     val imageId = galleryDao.insertImage(entity).toInt()
+                        ?: galleryDao.getImageIdByUri(contentUri)!!   // reuse if ignored
 
                     objectDetector!!.process(inputImage)
                         .addOnSuccessListener { detectedObjects ->
+                            if (detectedObjects.isEmpty()) return@addOnSuccessListener
+
                             lifecycleScope.launch(Dispatchers.IO) {
                                 for (obj in detectedObjects) {
                                     for (label in obj.labels) {
@@ -381,12 +486,12 @@ class MainActivity : AppCompatActivity() {  // Κύρια κλάση δραστ�
                             }
                         }
                 } catch (e: Exception) {
-                    // skip broken image
+                    Log.e("GalleryApp", "Failed to process ${img.imageTitle}", e)
                 }
             }
 
             withContext(Dispatchers.Main) {
-                Toast.makeText(this@MainActivity, "✅ Indexing finished! Try typing an object name", Toast.LENGTH_LONG).show()
+                Toast.makeText(this@MainActivity, "✅ Indexing finished! Search now works without duplicates", Toast.LENGTH_LONG).show()
             }
         }
     }
