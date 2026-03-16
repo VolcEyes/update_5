@@ -319,6 +319,9 @@ class MainActivity : AppCompatActivity() {  // Κύρια κλάση δραστ�
             }
         })
 
+// Replace your entire setOnSuggestionListener block with this one
+// (and DELETE the duplicate block below it — you had the same code twice)
+
         searchView.setOnSuggestionListener(object : SearchView.OnSuggestionListener {
             override fun onSuggestionSelect(position: Int): Boolean = false
 
@@ -329,35 +332,30 @@ class MainActivity : AppCompatActivity() {  // Κύρια κλάση δραστ�
                 cursor.moveToPosition(position)
                 val selected = cursor.getString(cursor.getColumnIndexOrThrow("suggestion"))
 
-                val current = searchView.query.toString().trim()
-                val newQuery = if (current.isEmpty() || current.endsWith(" ")) {
-                    "$current$selected "
+                val currentQuery = searchView.query.toString().trim()
+
+                // Replace only the last (partial) word → fixes "ri rifle" bug
+                val words = currentQuery.split("\\s+".toRegex()).toMutableList()
+                if (words.isNotEmpty()) {
+                    words[words.lastIndex] = selected
                 } else {
-                    "$current $selected "
+                    words.add(selected)
                 }
+
+                val newQuery = words.joinToString(" ") + " "
+
                 searchView.setQuery(newQuery, false)
+
+                // === FIXED: Move cursor to end (this was red before) ===
+                searchView.post {
+                    val editText = searchView.findViewById<EditText>(androidx.appcompat.R.id.search_src_text)
+                    editText?.setSelection(newQuery.length)
+                }
+
                 return true
             }
         })
-        searchView.setOnSuggestionListener(object : SearchView.OnSuggestionListener {
-            override fun onSuggestionSelect(position: Int): Boolean = false
 
-            override fun onSuggestionClick(position: Int): Boolean {
-                val cursor = searchView.suggestionsAdapter?.cursor ?: return false
-                cursor.moveToPosition(position)
-                val selected = cursor.getString(cursor.getColumnIndexOrThrow("suggestion"))
-
-                val current = searchView.query.toString().trim()
-                val newQuery = if (current.isEmpty() || current.endsWith(" ")) {
-                    "$current$selected "
-                } else {
-                    "$current $selected "
-                }
-
-                searchView.setQuery(newQuery, false)
-                return true
-            }
-        })
 
         // Focus change listener to show/hide keyboard reliably
         searchView.setOnQueryTextFocusChangeListener { view, hasFocus ->
