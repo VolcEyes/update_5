@@ -10,7 +10,8 @@ data class ImageSearchResult(
     val Image_id: Int,
     val name: String,
     val contentUri: String,
-    val matched_classes: Int,
+    val matched_classes: Int,      // how many of the searched objects are in the image
+    val matched_instances: Int,    // ← NEW: total number of matching objects (very important for single-word search)
     val total_objects: Int,
     val top_confidence: Double
 )
@@ -30,11 +31,21 @@ interface GalleryDao {
 
     @Transaction
     suspend fun getOrInsertObject(title: String): Int {
-        val existing = getObjIdByTitle(title)
-        if (existing != null) return existing
+        val cleanTitle = title.lowercase().trim()
+        if (cleanTitle.isBlank()) return -1
 
-        val newId = insertObject(ObjectEntity(Obj_Title = title))
-        return if (newId > 0) newId.toInt() else getObjIdByTitle(title)!!
+        // First check if it already exists
+        getObjIdByTitle(cleanTitle)?.let { return it }
+
+        // Try to insert (returns -1 only on conflict)
+        val newId = insertObject(ObjectEntity(Obj_Title = cleanTitle))
+
+        return if (newId > 0) {
+            newId.toInt()
+        } else {
+            // Race condition – someone else just inserted it
+            getObjIdByTitle(cleanTitle) ?: -1
+        }
     }
 
     @Query("SELECT MAX(instance_id) FROM ImagesObjects WHERE Image_id = :imageId AND Obj_id = :objId")
@@ -62,7 +73,9 @@ interface GalleryDao {
         i.Image_id,
         i.name,
         i.contentUri,
+        
         COUNT(DISTINCT CASE WHEN o.Obj_Title IN (:terms) THEN o.Obj_id END) AS matched_classes,
+        COUNT(CASE WHEN o.Obj_Title IN (:terms) THEN io.instance_id END) AS matched_instances,
         COUNT(io.Image_id) AS total_objects,
         MAX(CASE WHEN o.Obj_Title IN (:terms) THEN io.pred_score ELSE 0.0 END) AS top_confidence
     FROM ImagesTable i
@@ -70,17 +83,17 @@ interface GalleryDao {
     LEFT JOIN Objects o ON io.Obj_id = o.Obj_id
     GROUP BY i.Image_id
     ORDER BY 
-        matched_classes DESC,          -- matching images rise to the top
+        matched_classes DESC,          -- still #1 (2 classes always beats 1)
+        top_confidence DESC,           -- ← moved UP (your rule #2 for both 1-word and >1-word searches)
+        matched_instances DESC,        -- ← moved DOWN (this was pushing "many jeans" images higher)
         total_objects DESC,
-        top_confidence DESC,
-        i.Image_id DESC                -- non-matching images stay in newest-first order
+        i.Image_id DESC
 """)
     suspend fun getSortedImages(terms: List<String>): List<ImageSearchResult>
-
     @Query("""
     SELECT Obj_Title AS _id, Obj_Title AS suggestion 
     FROM Objects 
-    WHERE Obj_Title LIKE :prefix || '%' COLLATE NOCASE 
+    WHERE Obj_Title LIKE '%' || :prefix || '%' COLLATE NOCASE 
     ORDER BY Obj_Title 
     LIMIT 12
 """)
