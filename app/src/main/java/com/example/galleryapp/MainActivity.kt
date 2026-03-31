@@ -495,6 +495,7 @@ class MainActivity : AppCompatActivity() {  // Κύρια κλάση δραστ�
                     }
                     objectDetector!!.process(inputImage)
                         .addOnSuccessListener { detectedObjects ->
+
                             if (detectedObjects.isEmpty()) return@addOnSuccessListener
 
                             lifecycleScope.launch(Dispatchers.IO) {
