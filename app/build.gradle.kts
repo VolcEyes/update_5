@@ -4,6 +4,7 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.ksp)           // ← NEW (this replaces the old kapt)
+    id("io.objectbox") version "5.4.1"
 }
 
 android {
@@ -41,18 +42,12 @@ android {
         compose = true
     }
 
+    androidResources {
+        noCompress("tflite", "task")
+    }
 }
 
 dependencies {
-
-    val room_version = "2.8.4"
-
-    implementation("androidx.room:room-runtime:$room_version")
-    implementation("androidx.room:room-ktx:$room_version")
-    ksp("androidx.room:room-compiler:$room_version")
-
-// Needed for object detection (to populate the DB)
-    implementation("com.google.mlkit:object-detection-custom:17.0.2")
 
     implementation(libs.androidx.core.ktx)
     implementation("androidx.core:core-ktx:1.13.1")
@@ -81,4 +76,12 @@ dependencies {
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
+
+    // MediaPipe Face Landmarker
+    implementation("com.google.mediapipe:tasks-vision:0.20230731") // Use the latest available stable version
+
+    // TensorFlow Lite for MobileFaceNet
+    implementation("org.tensorflow:tensorflow-lite:2.17.0")
+    implementation("org.tensorflow:tensorflow-lite-support:0.5.0")
+
 }

@@ -5,6 +5,6 @@ class Image {
     var imageTitle:String= ""
 
 
-    constructor()
+    constructor(toString: String, toString1: String)
     {}
 }
