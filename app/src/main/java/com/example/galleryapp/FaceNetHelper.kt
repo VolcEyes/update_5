@@ -11,8 +11,8 @@ import java.nio.channels.FileChannel
 
 class FaceNetHelper(context: Context) {
     private var interpreter: Interpreter? = null
-    private val imageSize = 112 // Standard input size for MobileFaceNet
-    private val embeddingSize = 192 // Standard output size for MobileFaceNet
+    private val imageSize = 160 // Standard input size for MobileFaceNet
+    private val embeddingSize = 128 // Standard output size for MobileFaceNet
 
     init {
         interpreter = Interpreter(loadModelFile(context, "mobilefacenet.tflite")) // We will add this asset in Step 3
