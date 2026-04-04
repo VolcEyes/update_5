@@ -5,7 +5,7 @@
   "entities": [
     {
       "id": "1:3810440697939320906",
-      "lastPropertyId": "5:5983159629472776665",
+      "lastPropertyId": "4:3305289648551494113",
       "name": "FaceEntity",
       "properties": [
         {
@@ -31,11 +31,6 @@
           "type": 11,
           "flags": 520,
           "relationTarget": "ImageEntity"
-        },
-        {
-          "id": "5:5983159629472776665",
-          "name": "faceImagePath",
-          "type": 9
         }
       ],
       "relations": []

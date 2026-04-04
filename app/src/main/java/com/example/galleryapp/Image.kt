@@ -1,10 +1,7 @@
 package com.example.galleryapp
 
-class Image {
-    var imagePath:String= ""
-    var imageTitle:String= ""
-
-
-    constructor(toString: String, toString1: String)
-    {}
-}
+// A data class automatically assigns the constructor parameters to the variables
+data class Image(
+    var imagePath: String = "",
+    var imageTitle: String = ""
+)

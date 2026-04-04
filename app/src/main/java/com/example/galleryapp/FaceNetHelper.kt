@@ -8,6 +8,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.MappedByteBuffer
 import java.nio.channels.FileChannel
+import androidx.core.graphics.scale
 
 class FaceNetHelper(context: Context) {
     private var interpreter: Interpreter? = null
@@ -26,11 +27,14 @@ class FaceNetHelper(context: Context) {
     }
 
     fun getFaceVector(croppedFace: Bitmap): FloatArray {
-        val scaledBitmap = Bitmap.createScaledBitmap(croppedFace, imageSize, imageSize, false)
+        val scaledBitmap = croppedFace.scale(imageSize, imageSize, false)
         val byteBuffer = convertBitmapToByteBuffer(scaledBitmap)
 
         val output = Array(1) { FloatArray(embeddingSize) }
         interpreter?.run(byteBuffer, output)
+
+        // FREE MEMORY 3: Destroy the FaceNet scaled bitmap
+        scaledBitmap.recycle()
 
         return output[0]
     }
