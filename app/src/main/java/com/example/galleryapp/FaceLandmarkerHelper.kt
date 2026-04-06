@@ -19,7 +19,7 @@ class FaceLandmarkerHelper(context: Context) {
         val options = FaceLandmarker.FaceLandmarkerOptions.builder()
             .setBaseOptions(baseOptions)
             .setRunningMode(RunningMode.IMAGE)
-            .setNumFaces(5) // Max faces to detect per image
+            .setNumFaces(11) // Max faces to detect per image
             .build()
 
         faceLandmarker = FaceLandmarker.createFromOptions(context, options)

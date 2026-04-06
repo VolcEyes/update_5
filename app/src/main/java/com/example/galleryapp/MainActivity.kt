@@ -181,61 +181,100 @@ class MainActivity : AppCompatActivity() {
         // 3. Load Bitmap safely
         val bitmap = loadBitmapFromUri(imageUri) ?: return
 
-        // 4. Detect faces using MediaPipe
-        val result = faceLandmarkerHelper?.detectFaces(bitmap)
+// ... (Keep Step 1, 2, and 3 where you load the base bitmap) ...
 
-        // 5. Crop each detected face and vectorize it
-        result?.faceLandmarks()?.forEach { landmarks ->
-            var minX = Float.MAX_VALUE
-            var minY = Float.MAX_VALUE
-            var maxX = Float.MIN_VALUE
-            var maxY = Float.MIN_VALUE
+// 4. Set up Image Tiling parameters (2x2 grid with 20% overlap)
+        val originalWidth = bitmap.width
+        val originalHeight = bitmap.height
 
-            // Extract the tightest bounding box from the facial landmarks
-            landmarks.forEach { landmark ->
-                if (landmark.x() < minX) minX = landmark.x()
-                if (landmark.y() < minY) minY = landmark.y()
-                if (landmark.x() > maxX) maxX = landmark.x()
-                if (landmark.y() > maxY) maxY = landmark.y()
-            }
+        val numCols = 2
+        val numRows = 2
+        val overlapPercent = 0.20f
 
-            val width = bitmap.width
-            val height = bitmap.height
+// Calculate the width and height of each tile
+        val tileWidth = (originalWidth / (numCols - overlapPercent * (numCols - 1))).toInt()
+        val tileHeight = (originalHeight / (numRows - overlapPercent * (numRows - 1))).toInt()
 
-            // Convert normalized coordinates [0.0, 1.0] to pixel coordinates
-            val pxMinX = (minX * width).toInt().coerceAtLeast(0)
-            val pxMinY = (minY * height).toInt().coerceAtLeast(0)
-            val pxMaxX = (maxX * width).toInt().coerceAtMost(width)
-            val pxMaxY = (maxY * height).toInt().coerceAtMost(height)
+// Calculate how far to "slide" the window for the next tile
+        val strideX = (tileWidth * (1.0f - overlapPercent)).toInt()
+        val strideY = (tileHeight * (1.0f - overlapPercent)).toInt()
 
-            val boxWidth = pxMaxX - pxMinX
-            val boxHeight = pxMaxY - pxMinY
+// 5. Loop through the grid and process each tile
+        for (row in 0 until numRows) {
+            for (col in 0 until numCols) {
+                // Calculate starting X and Y for the current tile
+                val startX = col * strideX
+                val startY = row * strideY
 
-// ... (inside processImage)
-            if (boxWidth > 0 && boxHeight > 0) {
-                val croppedFace = Bitmap.createBitmap(bitmap, pxMinX, pxMinY, boxWidth, boxHeight)
-                val faceVector = faceNetHelper?.getFaceVector(croppedFace)
+                // Ensure we don't go out of bounds on the edges
+                val width = minOf(tileWidth, originalWidth - startX)
+                val height = minOf(tileHeight, originalHeight - startY)
 
-                // --- NEW: Save cropped face to internal storage ---
-                val faceFileName = "face_${System.currentTimeMillis()}_${java.util.UUID.randomUUID()}.jpg"
-                val file = java.io.File(applicationContext.filesDir, faceFileName)
-                java.io.FileOutputStream(file).use { out ->
-                    croppedFace.compress(Bitmap.CompressFormat.JPEG, 90, out)
+                // Create the tile bitmap
+                val tileBitmap = Bitmap.createBitmap(bitmap, startX, startY, width, height)
+
+                // Detect faces in just this specific tile
+                val result = faceLandmarkerHelper?.detectFaces(tileBitmap)
+
+                result?.faceLandmarks()?.forEach { landmarks ->
+                    var minX = Float.MAX_VALUE
+                    var minY = Float.MAX_VALUE
+                    var maxX = Float.MIN_VALUE
+                    var maxY = Float.MIN_VALUE
+
+                    // Extract the tightest bounding box from the facial landmarks (normalized for the TILE)
+                    landmarks.forEach { landmark ->
+                        if (landmark.x() < minX) minX = landmark.x()
+                        if (landmark.y() < minY) minY = landmark.y()
+                        if (landmark.x() > maxX) maxX = landmark.x()
+                        if (landmark.y() > maxY) maxY = landmark.y()
+                    }
+
+                    // Convert normalized coordinates to pixel coordinates AND ADD the tile's starting offset
+                    // This maps the face back to the exact location on the ORIGINAL, massive image
+                    val pxMinX = ((minX * width).toInt() + startX).coerceAtLeast(0)
+                    val pxMinY = ((minY * height).toInt() + startY).coerceAtLeast(0)
+                    val pxMaxX = ((maxX * width).toInt() + startX).coerceAtMost(originalWidth)
+                    val pxMaxY = ((maxY * height).toInt() + startY).coerceAtMost(originalHeight)
+
+                    val boxWidth = pxMaxX - pxMinX
+                    val boxHeight = pxMaxY - pxMinY
+
+                    if (boxWidth > 0 && boxHeight > 0) {
+                        // Crop from the ORIGINAL high-res bitmap, not the tile
+                        val croppedFace = Bitmap.createBitmap(bitmap, pxMinX, pxMinY, boxWidth, boxHeight)
+
+                        // Get the vector
+                        val faceVector = faceNetHelper?.getFaceVector(croppedFace)
+
+                        // Save cropped face to internal storage
+                        val faceFileName = "face_${System.currentTimeMillis()}_${java.util.UUID.randomUUID()}.jpg"
+                        val file = java.io.File(applicationContext.filesDir, faceFileName)
+                        java.io.FileOutputStream(file).use { out ->
+                            croppedFace.compress(Bitmap.CompressFormat.JPEG, 90, out)
+                        }
+
+                        // Save to database
+                        val faceEntity = FaceEntity(
+                            faceVector = faceVector,
+                            boundingBox = "$pxMinX,$pxMinY,$pxMaxX,$pxMaxY",
+                            faceImagePath = file.absolutePath
+                        )
+                        faceEntity.image.target = imageEntity
+                        faceBox.put(faceEntity)
+
+                        // FREE MEMORY
+                        croppedFace.recycle()
+                    }
                 }
-                // --------------------------------------------------
 
-                val faceEntity = FaceEntity(
-                    faceVector = faceVector,
-                    boundingBox = "$pxMinX,$pxMinY,$pxMaxX,$pxMaxY",
-                    faceImagePath = file.absolutePath // Store the file path
-                )
-                faceEntity.image.target = imageEntity
-                faceBox.put(faceEntity)
-
-                // FREE MEMORY
-                croppedFace.recycle()
+                // FREE MEMORY: Recycle the tile once we are done scanning it
+                tileBitmap.recycle()
             }
         }
+
+// FREE MEMORY 2: Destroy the large base image at the very end of processImage
+        bitmap.recycle()
 
 // FREE MEMORY 2: Destroy the large base image at the very end of processImage
         bitmap.recycle()
@@ -251,8 +290,8 @@ class MainActivity : AppCompatActivity() {
             }
 
             // Target maximum dimensions (e.g., 1024x1024 is usually enough for face detection)
-            val reqWidth = 1024
-            val reqHeight = 1024
+            val reqWidth = 3072
+            val reqHeight = 3072
             var inSampleSize = 1
 
             if (options.outHeight > reqHeight || options.outWidth > reqWidth) {
@@ -266,10 +305,21 @@ class MainActivity : AppCompatActivity() {
             // Now decode the actual bitmap using the calculated sample size
             options.inJustDecodeBounds = false
             options.inSampleSize = inSampleSize
+            options.inPreferredConfig = Bitmap.Config.ARGB_8888
 
-            contentResolver.openInputStream(uri)?.use { inputStream ->
+            var bitmap = contentResolver.openInputStream(uri)?.use { inputStream ->
                 BitmapFactory.decodeStream(inputStream, null, options)
             }
+
+            // 2. Android can sometimes ignore inPreferredConfig.
+            // If the config is still wrong or null (like HARDWARE), we MUST convert it safely.
+            if (bitmap != null && bitmap.config != Bitmap.Config.ARGB_8888) {
+                val convertedBitmap = bitmap.copy(Bitmap.Config.ARGB_8888, true)
+                bitmap.recycle() // Recycle the old incorrect format to prevent memory leaks
+                bitmap = convertedBitmap
+            }
+
+            return bitmap
         } catch (e: Exception) {
             e.printStackTrace()
             null
@@ -310,14 +360,15 @@ class MainActivity : AppCompatActivity() {
         val btnApply = view.findViewById<Button>(R.id.btn_apply)
 
         // Set the layout to scroll horizontally
-        facesRecyclerView.layoutManager = LinearLayoutManager(this, LinearLayoutManager.HORIZONTAL, false)
-
+// The default LinearLayoutManager is vertical
+// Scroll vertically in a grid with 4 columns
+        facesRecyclerView.layoutManager = GridLayoutManager(this, 4)
         // 1. Get all faces from the database
         val allFaces = faceBox.all
 
         // 2. Filter for unique faces (Deduplication)
         val uniqueFaces = ArrayList<FaceEntity>()
-        val similarityThreshold = 0.65f // Faces with similarity above this are considered the same person
+        val similarityThreshold = 1f // Faces with similarity above this are considered the same person
 
         for (face in allFaces) {
             val currentVector = face.faceVector ?: continue
