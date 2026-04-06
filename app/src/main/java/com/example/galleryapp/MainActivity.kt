@@ -240,18 +240,48 @@ class MainActivity : AppCompatActivity() {
                     val boxWidth = pxMaxX - pxMinX
                     val boxHeight = pxMaxY - pxMinY
 
-                    if (boxWidth > 0 && boxHeight > 0) {
-                        // Crop from the ORIGINAL high-res bitmap, not the tile
-                        val croppedFace = Bitmap.createBitmap(bitmap, pxMinX, pxMinY, boxWidth, boxHeight)
+                    if (boxWidth > 0 && boxHeight > 0 && landmarks.size > 263) {
 
-                        // Get the vector
-                        val faceVector = faceNetHelper?.getFaceVector(croppedFace)
+                        // 1. Identify Left and Right Eye Landmarks
+                        // MediaPipe Landmark Index 33 is Left Eye, Index 263 is Right Eye
+                        val leftEye = landmarks[33]
+                        val rightEye = landmarks[263]
+
+                        // Convert normalized coordinates to pixel coordinates on the TILE
+                        val leftEyePxX = (leftEye.x() * width) + startX
+                        val leftEyePxY = (leftEye.y() * height) + startY
+                        val rightEyePxX = (rightEye.x() * width) + startX
+                        val rightEyePxY = (rightEye.y() * height) + startY
+
+                        // 2. Calculate the Angle of rotation between the eyes
+                        val deltaY = rightEyePxY - leftEyePxY
+                        val deltaX = rightEyePxX - leftEyePxX
+                        val angle = Math.toDegrees(kotlin.math.atan2(deltaY.toDouble(), deltaX.toDouble())).toFloat()
+
+                        // 3. Setup the Rotation Matrix
+                        val matrix = android.graphics.Matrix()
+                        // Rotate around the center of the cropped bounding box (0,0 is the top-left of the crop)
+                        matrix.postRotate(-angle, boxWidth / 2f, boxHeight / 2f)
+
+                        // 4. Crop AND Align the face from the original high-res bitmap
+                        val alignedAndCroppedFace = Bitmap.createBitmap(
+                            bitmap,
+                            pxMinX,
+                            pxMinY,
+                            boxWidth,
+                            boxHeight,
+                            matrix,
+                            true // Enables bilinear filtering for a smooth rotation
+                        )
+
+                        // 5. Get the vector from the ALIGNED face
+                        val faceVector = faceNetHelper?.getFaceVector(alignedAndCroppedFace)
 
                         // Save cropped face to internal storage
                         val faceFileName = "face_${System.currentTimeMillis()}_${java.util.UUID.randomUUID()}.jpg"
                         val file = java.io.File(applicationContext.filesDir, faceFileName)
                         java.io.FileOutputStream(file).use { out ->
-                            croppedFace.compress(Bitmap.CompressFormat.JPEG, 90, out)
+                            alignedAndCroppedFace.compress(Bitmap.CompressFormat.JPEG, 90, out)
                         }
 
                         // Save to database
@@ -264,7 +294,7 @@ class MainActivity : AppCompatActivity() {
                         faceBox.put(faceEntity)
 
                         // FREE MEMORY
-                        croppedFace.recycle()
+                        alignedAndCroppedFace.recycle()
                     }
                 }
 
@@ -368,7 +398,7 @@ class MainActivity : AppCompatActivity() {
 
         // 2. Filter for unique faces (Deduplication)
         val uniqueFaces = ArrayList<FaceEntity>()
-        val similarityThreshold = 1f // Faces with similarity above this are considered the same person
+        val similarityThreshold = 0.45f // Faces with similarity above this are considered the same person
 
         for (face in allFaces) {
             val currentVector = face.faceVector ?: continue
@@ -395,11 +425,45 @@ class MainActivity : AppCompatActivity() {
         facesRecyclerView.adapter = faceAdapter
 
         // 4. Apply button logic
+// 4. Apply button logic
         btnApply.setOnClickListener {
             if (chosenFace != null) {
-                // TODO: In the next step, we will use chosenFace.faceVector to filter the gallery!
-                Toast.makeText(this, "Face Selected! Filtering coming soon.", Toast.LENGTH_SHORT).show()
-                bottomSheetDialog.dismiss()
+                val targetVector = chosenFace?.faceVector
+
+                if (targetVector != null) {
+                    // Immich recommends a threshold around 0.6 for clustering.
+                    // Lowering it groups more aggressively, raising it requires stricter matches.
+                    val similarityThreshold = 0.6f
+
+                    // 1. Find all faces in the database that belong to this person
+                    val matchingFaces = faceBox.all.filter { face ->
+                        val vector = face.faceVector
+                        if (vector != null) {
+                            calculateCosineSimilarity(targetVector, vector) >= similarityThreshold
+                        } else {
+                            false
+                        }
+                    }
+
+                    // 2. Extract the parent images for those matching faces
+                    // We use distinctBy { it.id } in case the same person appears twice in one photo
+                    val filteredImageEntities = matchingFaces
+                        .mapNotNull { it.image.target }
+                        .distinctBy { it.id }
+
+                    // 3. Convert the database entities back into UI Image objects
+                    val filteredImages = filteredImageEntities.map { entity ->
+                        Image(entity.imageUri, entity.dateModified.toString())
+                    }
+
+                    // 4. Update the Main Activity's RecyclerView to show only the filtered images
+                    imageList.clear()
+                    imageList.addAll(filteredImages)
+                    imageAdapter.notifyDataSetChanged()
+
+                    Toast.makeText(this, "Found ${filteredImages.size} photos of this person", Toast.LENGTH_SHORT).show()
+                    bottomSheetDialog.dismiss()
+                }
             } else {
                 Toast.makeText(this, "Please select a face first.", Toast.LENGTH_SHORT).show()
             }
