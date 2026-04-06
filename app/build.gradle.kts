@@ -87,8 +87,9 @@ dependencies {
     // MediaPipe Face Landmarker
     implementation("com.google.mediapipe:tasks-vision:0.10.33") // Use the latest available stable version
 
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.17.1")
+
     // TensorFlow Lite for MobileFaceNet
-    implementation("org.tensorflow:tensorflow-lite:2.17.0")
-    //implementation("org.tensorflow:tensorflow-lite-support:0.5.0")
+    //implementation("org.tensorflow:tensorflow-lite:2.17.0")
 
 }

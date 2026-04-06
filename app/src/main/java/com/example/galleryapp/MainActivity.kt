@@ -44,7 +44,8 @@ class MainActivity : AppCompatActivity() {
 
     // ML Helpers
     private var faceLandmarkerHelper: FaceLandmarkerHelper? = null
-    private var faceNetHelper: FaceNetHelper? = null
+    //private var faceNetHelper: FaceNetHelper? = null
+    private var onnxFaceHelper: OnnxFaceHelper? = null
 
     // Database Boxes
     private lateinit var imageBox: Box<ImageEntity>
@@ -92,7 +93,8 @@ class MainActivity : AppCompatActivity() {
             try {
                 Log.d("AppDebug", "Starting ML Models...")
                 faceLandmarkerHelper = FaceLandmarkerHelper(this@MainActivity)
-                faceNetHelper = FaceNetHelper(this@MainActivity)
+                //faceNetHelper = FaceNetHelper(this@MainActivity)
+                onnxFaceHelper = OnnxFaceHelper(this@MainActivity)
                 Log.d("AppDebug", "ML Models Loaded Successfully!")
 
                 withContext(Dispatchers.Main) {
@@ -275,7 +277,8 @@ class MainActivity : AppCompatActivity() {
                         )
 
                         // 5. Get the vector from the ALIGNED face
-                        val faceVector = faceNetHelper?.getFaceVector(alignedAndCroppedFace)
+                        // val faceVector = faceNetHelper?.getFaceVector(alignedAndCroppedFace)
+                        val faceVector = onnxFaceHelper?.getFaceVector(alignedAndCroppedFace)
 
                         // Save cropped face to internal storage
                         val faceFileName = "face_${System.currentTimeMillis()}_${java.util.UUID.randomUUID()}.jpg"
@@ -360,7 +363,8 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
         // Clean up ML resources to prevent memory leaks when the activity dies
         faceLandmarkerHelper?.clear()
-        faceNetHelper?.close()
+        //faceNetHelper?.close()
+        onnxFaceHelper?.close()
     }
 
     //SEARCH MENU

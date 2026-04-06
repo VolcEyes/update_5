@@ -2,63 +2,77 @@ package com.example.galleryapp
 
 import android.content.Context
 import android.graphics.Bitmap
-import org.tensorflow.lite.Interpreter
-import java.io.FileInputStream
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
-import java.nio.MappedByteBuffer
-import java.nio.channels.FileChannel
 import androidx.core.graphics.scale
+import ai.onnxruntime.OnnxTensor
+import ai.onnxruntime.OrtEnvironment
+import ai.onnxruntime.OrtSession
+import java.nio.FloatBuffer
 
-class FaceNetHelper(context: Context) {
-    private var interpreter: Interpreter? = null
-    private val imageSize = 160 // Standard input size for MobileFaceNet
-    private val embeddingSize = 128 // Standard output size for MobileFaceNet
+class OnnxFaceHelper(context: Context) {
+    private var ortEnv: OrtEnvironment = OrtEnvironment.getEnvironment()
+    private var ortSession: OrtSession? = null
+
+    // InsightFace Buffalo recognition models expect exactly 112x112
+    private val imageSize = 112
 
     init {
-        interpreter = Interpreter(loadModelFile(context, "mobilefacenet.tflite")) // We will add this asset in Step 3
+        // Load the model from the assets folder
+        val modelBytes = context.assets.open("w600k_mbf.onnx").readBytes()
+        ortSession = ortEnv.createSession(modelBytes)
     }
 
-    private fun loadModelFile(context: Context, modelName: String): MappedByteBuffer {
-        val fileDescriptor = context.assets.openFd(modelName)
-        val inputStream = FileInputStream(fileDescriptor.fileDescriptor)
-        val fileChannel = inputStream.channel
-        return fileChannel.map(FileChannel.MapMode.READ_ONLY, fileDescriptor.startOffset, fileDescriptor.declaredLength)
-    }
+    fun getFaceVector(alignedFace: Bitmap): FloatArray? {
+        val scaledBitmap = alignedFace.scale(imageSize, imageSize, false)
 
-    fun getFaceVector(croppedFace: Bitmap): FloatArray {
-        val scaledBitmap = croppedFace.scale(imageSize, imageSize, false)
-        val byteBuffer = convertBitmapToByteBuffer(scaledBitmap)
+        // 1. Convert to NCHW FloatBuffer
+        val floatBuffer = convertBitmapToNchwBuffer(scaledBitmap)
 
-        val output = Array(1) { FloatArray(embeddingSize) }
-        interpreter?.run(byteBuffer, output)
+        // 2. Create the tensor: Shape is [1, 3, 112, 112]
+        val shape = longArrayOf(1, 3, imageSize.toLong(), imageSize.toLong())
+        val tensor = OnnxTensor.createTensor(ortEnv, floatBuffer, shape)
 
-        // FREE MEMORY 3: Destroy the FaceNet scaled bitmap
+        // 3. Run Inference
+        val result = ortSession?.run(mapOf("input.1" to tensor))
+        // 4. Extract the 512-dimensional output embedding
+        val outputData = result?.get(0)?.value as? Array<FloatArray>
+        val embedding = outputData?.get(0)
+
+        // FREE MEMORY
+        tensor.close()
+        result?.close()
         scaledBitmap.recycle()
 
-        return output[0]
+        return embedding
     }
 
-    private fun convertBitmapToByteBuffer(bitmap: Bitmap): ByteBuffer {
-        val byteBuffer = ByteBuffer.allocateDirect(4 * imageSize * imageSize * 3)
-        byteBuffer.order(ByteOrder.nativeOrder())
-        val intValues = IntArray(imageSize * imageSize)
-        bitmap.getPixels(intValues, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+    private fun convertBitmapToNchwBuffer(bitmap: Bitmap): FloatBuffer {
+        val floatBuffer = FloatBuffer.allocate(3 * imageSize * imageSize)
+        val pixels = IntArray(imageSize * imageSize)
+        bitmap.getPixels(pixels, 0, imageSize, 0, 0, imageSize, imageSize)
 
-        var pixel = 0
-        for (i in 0 until imageSize) {
-            for (j in 0 until imageSize) {
-                val `val` = intValues[pixel++]
-                // Normalize to [-1, 1] as required by MobileFaceNet
-                byteBuffer.putFloat((((`val` shr 16) and 0xFF) - 127.5f) / 128.0f)
-                byteBuffer.putFloat((((`val` shr 8) and 0xFF) - 127.5f) / 128.0f)
-                byteBuffer.putFloat(((`val` and 0xFF) - 127.5f) / 128.0f)
-            }
+        // NCHW separation: Calculate starting indices for Red, Green, and Blue channels
+        val rOffset = 0
+        val gOffset = imageSize * imageSize
+        val bOffset = 2 * imageSize * imageSize
+
+        for (i in pixels.indices) {
+            val color = pixels[i]
+
+            // Extract RGB and normalize
+            val r = (((color shr 16) and 0xFF) - 127.5f) / 128.0f
+            val g = (((color shr 8) and 0xFF) - 127.5f) / 128.0f
+            val b = ((color and 0xFF) - 127.5f) / 128.0f
+
+            // Place into the buffer at the correct NCHW offset
+            floatBuffer.put(rOffset + i, r)
+            floatBuffer.put(gOffset + i, g)
+            floatBuffer.put(bOffset + i, b)
         }
-        return byteBuffer
+        return floatBuffer
     }
 
     fun close() {
-        interpreter?.close()
+        ortSession?.close()
+        ortEnv.close()
     }
 }
