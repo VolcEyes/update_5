@@ -51,6 +51,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var imageBox: Box<ImageEntity>
     private lateinit var faceBox: Box<FaceEntity>
 
+    private lateinit var personBox: Box<PersonEntity> // Add this line
     // UI Elements
     private lateinit var recyclerView: RecyclerView
     private lateinit var imageAdapter: ImageAdapter
@@ -78,6 +79,7 @@ class MainActivity : AppCompatActivity() {
 
         imageBox = GalleryApp.boxStore.boxFor(ImageEntity::class.java)
         faceBox = GalleryApp.boxStore.boxFor(FaceEntity::class.java)
+        personBox = GalleryApp.boxStore.boxFor(PersonEntity::class.java) // Add this line
 
         recyclerView = findViewById(R.id.image_recycler)
         recyclerView.layoutManager = GridLayoutManager(this, 3)
@@ -344,7 +346,11 @@ class MainActivity : AppCompatActivity() {
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         return when (item.itemId) {
             R.id.action_search -> {
-                showSearchBottomSheet() // Call our function when clicked
+                // Execute the clustering job to link faces to persons
+                runFacialRecognitionBatchJob()
+
+                // Then show the bottom sheet
+                showSearchBottomSheet()
                 true
             }
             else -> super.onOptionsItemSelected(item)
@@ -359,71 +365,77 @@ class MainActivity : AppCompatActivity() {
         val facesRecyclerView = view.findViewById<RecyclerView>(R.id.recycler_faces)
         val btnApply = view.findViewById<Button>(R.id.btn_apply)
 
-        // Set the layout to scroll horizontally
-// The default LinearLayoutManager is vertical
-// Scroll vertically in a grid with 4 columns
         facesRecyclerView.layoutManager = GridLayoutManager(this, 4)
-        // 1. Get all faces from the database
-        val allFaces = faceBox.all
 
-        // 2. Filter for unique faces (Deduplication)
-        val uniqueFaces = ArrayList<FaceEntity>()
-        val similarityThreshold = 0.45f // Faces with similarity above this are considered the same person
+        // --- NEW SIMPLIFIED LOGIC ---
 
-        for (face in allFaces) {
-            val currentVector = face.faceVector ?: continue
-            var isUnique = true
+        // 1. Grab all successfully clustered people from the database
+        val allPersons = personBox.all
+        val uniqueFacesToDisplay = ArrayList<FaceEntity>()
 
-            // Compare against already approved unique faces
-            for (approvedFace in uniqueFaces) {
-                val approvedVector = approvedFace.faceVector ?: continue
-                if (calculateCosineSimilarity(currentVector, approvedVector) > similarityThreshold) {
-                    isUnique = false // It's a duplicate of someone we already have
-                    break
-                }
-            }
-            if (isUnique) {
-                uniqueFaces.add(face)
+        // 2. Extract exactly ONE cover face for each unique person to show in the grid
+        for (person in allPersons) {
+            val coverFace = person.faces.firstOrNull()
+            if (coverFace != null) {
+                uniqueFacesToDisplay.add(coverFace)
             }
         }
 
-        // 3. Setup the Adapter
+        // 3. (Optional) Also grab any faces that failed to cluster, so they still appear as options
+        val unclusteredFaces = faceBox.query().equal(FaceEntity_.personId, 0L).build().find()
+        uniqueFacesToDisplay.addAll(unclusteredFaces)
+
+        // 4. Setup the Adapter
         var chosenFace: FaceEntity? = null
-        val faceAdapter = FaceAdapter(this, uniqueFaces) { selectedFace ->
+        val faceAdapter = FaceAdapter(this, uniqueFacesToDisplay) { selectedFace ->
             chosenFace = selectedFace // Save the face the user clicked
         }
         facesRecyclerView.adapter = faceAdapter
 
+        // ... Keep your btnApply.setOnClickListener code exactly as it is right here ...
         // 4. Apply button logic
-// 4. Apply button logic
-        // 4. Apply button logic (Centroid/Clustering Approach)
         btnApply.setOnClickListener {
-            // Assume chosenPersonEntity is the Person the user tapped in the BottomSheet
-            val selectedPerson = PersonEntity_
-            val photosOfPerson = selectedPerson.faces.map { it.image.target }
-            if (selectedPerson != null) {
-                // 1. Fetch all photos assigned to this static Person ID directly
-                // (No math, no vector comparisons, no nearest neighbors needed!)
-                val photosOfPerson = selectedPerson.faces.mapNotNull { it.image.target }
+            // 1. Did the user actually tap a face? If not, stop here.
+            if (chosenFace == null) {
+                Toast.makeText(this@MainActivity, "Please tap a face first.", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
 
+            // 2. Check if this face was successfully grouped into a "Person" by DBSCAN
+            val selectedPerson = chosenFace?.person?.target
+
+            if (selectedPerson != null) {
+                // SCENARIO A: The face belongs to a clustered Person
+                val photosOfPerson = selectedPerson.faces.mapNotNull { it.image.target }
                 val filteredImages = photosOfPerson.map { entity ->
                     Image(entity.imageUri, entity.dateModified.toString())
                 }
 
-                // 2. Update UI
                 imageList.clear()
                 imageList.addAll(filteredImages)
                 imageAdapter.notifyDataSetChanged()
 
                 Toast.makeText(this@MainActivity, "Found ${filteredImages.size} photos of this person", Toast.LENGTH_SHORT).show()
                 bottomSheetDialog.dismiss()
-            } else {
-                Toast.makeText(this@MainActivity, "Please select a person first.", Toast.LENGTH_SHORT).show()
-            }
 
-            imageList.clear()
-            imageList.addAll(photosOfPerson)
-            imageAdapter.notifyDataSetChanged()
+            } else {
+                // SCENARIO B: The face is unassigned (Clustering skipped it)
+                // Fallback: Just display the single original image that this face belongs to!
+                val singleImageEntity = chosenFace?.image?.target
+
+                if (singleImageEntity != null) {
+                    val singleImage = Image(singleImageEntity.imageUri, singleImageEntity.dateModified.toString())
+
+                    imageList.clear()
+                    imageList.add(singleImage)
+                    imageAdapter.notifyDataSetChanged()
+
+                    Toast.makeText(this@MainActivity, "Showing 1 unclustered photo", Toast.LENGTH_SHORT).show()
+                    bottomSheetDialog.dismiss()
+                } else {
+                    Toast.makeText(this@MainActivity, "Error: Could not load the image.", Toast.LENGTH_SHORT).show()
+                }
+            }
         }
 
         // 5. Show the Dialog (2/3 height)
@@ -441,22 +453,30 @@ class MainActivity : AppCompatActivity() {
 
     // Conceptual logic for your background job
     fun runFacialRecognitionBatchJob() {
-        val allUnassignedFaces = faceBox.query().isNull(FaceEntity_.personId).build().find()
+        // FIX: Look for 0 (unassigned), not null!
+        val allUnassignedFaces = faceBox.query().equal(FaceEntity_.personId, 0L).build().find()
 
-        // 1. Run DBSCAN (Graphing, Core Points, Chain Linking)
-        val clusterer = FaceClusterer(eps = 0.45f, minPts = 2)
+        Log.d("ClusterDebug", "Started Job: Found ${allUnassignedFaces.size} faces to cluster")
+
+        if (allUnassignedFaces.isEmpty()) {
+            Log.d("ClusterDebug", "No new faces to process.")
+            return
+        }
+
+        // Using 0.60f to allow a slightly wider margin for error in matching
+        val clusterer = FaceClusterer(eps = 0.60f, minPts = 2)
         val clusters = clusterer.cluster(allUnassignedFaces)
 
-        // 2. Save Clusters to Database (Static Display Preparation)
+        Log.d("ClusterDebug", "DBSCAN finished: Formed ${clusters.size} clusters (Persons)")
+
         for (cluster in clusters) {
-            // Create a new master "Person" for this chain of faces
             val person = PersonEntity(coverFaceImagePath = cluster.first().faceImagePath)
             val personId = personBox.put(person)
+            Log.d("ClusterDebug", "Saved Person ID $personId with ${cluster.size} photos")
 
-            // Assign every face in this DBSCAN chain to this exact Person ID
             for (face in cluster) {
                 face.person.target = person
-                faceBox.put(face)
+                faceBox.put(face) // Save the updated face back to the database
             }
         }
     }
