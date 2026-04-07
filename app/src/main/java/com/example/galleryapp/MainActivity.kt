@@ -138,6 +138,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         if (ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED) {
+            syncDatabaseWithGallery()
             loadGalleryImages()
         } else {
             requestPermissionLauncher.launch(permission)
@@ -556,13 +557,9 @@ class MainActivity : AppCompatActivity() {
     private fun scanNewlyAddedImages(context: Context) {
         lifecycleScope.launch(Dispatchers.IO) {
             val prefs = context.getSharedPreferences("GalleryPrefs", Context.MODE_PRIVATE)
-            // Retrieve the timestamp of the last scan (0L if it's the first time)
             val lastScanTime = prefs.getLong("last_scan_time", 0L)
             var maxScannedTime = lastScanTime
 
-            val newFacesToCluster = mutableListOf<FaceEntity>()
-
-            // 1. Query MediaStore for images added strictly AFTER lastScanTime
             val projection = arrayOf(
                 MediaStore.Images.Media._ID,
                 MediaStore.Images.Media.DATE_ADDED
@@ -583,7 +580,7 @@ class MainActivity : AppCompatActivity() {
 
                 while (cursor.moveToNext()) {
                     val id = cursor.getLong(idColumn)
-                    val dateAdded = cursor.getLong(dateAddedColumn) * 1000 // Convert back to milliseconds
+                    val dateAdded = cursor.getLong(dateAddedColumn) * 1000
 
                     val contentUri = Uri.withAppendedPath(
                         MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
@@ -594,53 +591,20 @@ class MainActivity : AppCompatActivity() {
                         maxScannedTime = dateAdded
                     }
 
-                    // 2. Load the image bitmap
-                    val bitmap = loadBitmapFromUri(context, contentUri) ?: continue
-
-                    // 3. Save the base ImageEntity to ObjectBox
-                    val imageEntity = ImageEntity(imageUri = contentUri.toString(), dateModified = dateAdded)
-                    imageBox.put(imageEntity)
-
-                    // 4. Run Detection (SCRFD)
-                    val detections = scrfdHelper?.detectFaces(bitmap)
-
-                    if (detections != null) {
-                        for (detection in detections) {
-                            // 5. Align & Crop
-                            val alignedFace = FaceAligner.alignAndCrop(bitmap, detection.keypoints)
-
-                            // 6. Extract Vector (FaceNet)
-                            val faceVector = faceNetHelper?.getFaceVector(alignedFace) ?: continue
-
-                            // 7. Create and save FaceEntity to DB
-                            val faceEntity = FaceEntity(
-                                faceVector = faceVector,
-                                boundingBox = detection.boundingBox.joinToString(",")
-                            )
-                            faceEntity.image.target = imageEntity
-
-                            faceBox.put(faceEntity) // Save so it gets a real ID
-                            newFacesToCluster.add(faceEntity)
-                        }
+                    // Re-use your perfect detection, cropping, and saving pipeline
+                    mlMutex.withLock {
+                        processImage(contentUri, dateAdded)
                     }
                 }
             }
 
-            // 8. Trigger Incremental DBSCAN if we extracted new faces
-            if (newFacesToCluster.isNotEmpty()) {
-                // Initialize the clusterer locally on the background thread
-                val clusterer = FaceClusterer(faceBox, personBox, eps = 0.62f, minPts = 2)
+            // Trigger DBSCAN automatically for all new, unassigned faces
+            runFacialRecognitionBatchJob()
 
-                clusterer.enqueueFacesForClustering(newFacesToCluster)
-                clusterer.processClusteringQueue()
-            }
-
-            // 9. Save the newest timestamp so we skip these images next time
             prefs.edit().putLong("last_scan_time", maxScannedTime).apply()
 
-            // 10. Notify UI that the background job is done
             withContext(Dispatchers.Main) {
-                Toast.makeText(context, "Scan Complete! Found and clustered ${newFacesToCluster.size} faces.", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Scan & Clustering Complete!", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -694,6 +658,67 @@ class MainActivity : AppCompatActivity() {
 
         Log.d("ClusterDebug", "Incremental DBSCAN finished processing queue.")
     }
+
+    private fun syncDatabaseWithGallery() {
+        lifecycleScope.launch(Dispatchers.IO) {
+            // 1. Get all current valid image URIs from Android MediaStore
+            val validUris = HashSet<String>()
+            val projection = arrayOf(MediaStore.Images.Media._ID)
+
+            contentResolver.query(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                projection, null, null, null
+            )?.use { cursor ->
+                val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
+                while (cursor.moveToNext()) {
+                    val id = cursor.getLong(idColumn)
+                    val contentUri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
+                    validUris.add(contentUri.toString())
+                }
+            }
+
+            // 2. Fetch all images currently saved in ObjectBox
+            val dbImages = imageBox.all
+            val imagesToDelete = mutableListOf<ImageEntity>()
+            val facesToDelete = mutableListOf<FaceEntity>()
+
+            // 3. Find database entries that are no longer in the device gallery
+            for (dbImage in dbImages) {
+                if (!validUris.contains(dbImage.imageUri)) {
+                    imagesToDelete.add(dbImage)
+                    facesToDelete.addAll(dbImage.faces)
+
+                    // Free up internal storage by deleting the cropped face files
+                    for (face in dbImage.faces) {
+                        if (face.faceImagePath.isNotEmpty()) {
+                            val faceFile = java.io.File(face.faceImagePath)
+                            if (faceFile.exists()) {
+                                faceFile.delete()
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 4. Remove the orphaned records from ObjectBox
+            if (facesToDelete.isNotEmpty()) {
+                faceBox.remove(facesToDelete)
+                Log.d("AppDebug", "Deleted ${facesToDelete.size} orphaned faces")
+            }
+            if (imagesToDelete.isNotEmpty()) {
+                imageBox.remove(imagesToDelete)
+                Log.d("AppDebug", "Deleted ${imagesToDelete.size} orphaned images")
+            }
+
+            // 5. (Optional) Cleanup empty Person groupings
+            // If a person has no faces left because you deleted all their photos, remove the PersonEntity
+            val emptyPersons = personBox.all.filter { it.faces.isEmpty() }
+            if (emptyPersons.isNotEmpty()) {
+                personBox.remove(emptyPersons)
+            }
+        }
+    }
+
 
     // Helper math function to calculate if two faces belong to the same person
     private fun calculateCosineSimilarity(v1: FloatArray, v2: FloatArray): Float {

@@ -26,32 +26,27 @@ class FaceClusterer(
     fun processClusteringQueue() {
         if (clusteringQueue.isEmpty()) return
 
-        // Holds faces that don't meet the minPts threshold initially
         val deferredFaces = mutableListOf<FaceEntity>()
         val iterator = clusteringQueue.iterator()
 
         while (iterator.hasNext()) {
             val targetFace = iterator.next()
-
-            // Find neighbors (To be implemented in Step 2)
             val similarFaces = findSimilarFaces(targetFace)
 
-            if (similarFaces.size < minPts) {
-                // Not enough matches to form a cluster right now.
-                // Defer it to check again at the very end.
-                deferredFaces.add(targetFace)
-            } else {
-                // Threshold met. Assign to existing person or create a new one.
-                // (To be implemented in Step 3)
+            // Check if any neighboring face is already assigned to an existing Person
+            val hasAssignedNeighbor = similarFaces.any { it.person.target != null }
+
+            // Join immediately if it matches a known person, OR if it has enough matches to form a new one
+            if (hasAssignedNeighbor || similarFaces.size >= minPts) {
                 assignOrCluster(targetFace, similarFaces)
+            } else {
+                // Only defer if it truly behaves like noise
+                deferredFaces.add(targetFace)
             }
 
-            // Remove the face from the active queue once processed
             iterator.remove()
         }
 
-        // Retry deferred faces to see if they can join newly created clusters.
-        // (To be implemented in Step 4)
         retryDeferredFaces(deferredFaces)
     }
 
