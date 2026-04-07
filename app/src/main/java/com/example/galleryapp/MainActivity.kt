@@ -30,6 +30,7 @@ import android.view.Menu
 import android.view.MenuItem
 import android.widget.Button
 import android.widget.LinearLayout
+import android.widget.TextView
 import com.google.android.material.bottomsheet.BottomSheetBehavior
 import com.google.android.material.bottomsheet.BottomSheetDialog
 
@@ -62,6 +63,14 @@ class MainActivity : AppCompatActivity() {
     // This ensures only 3 images are processed by the ML models at the exact same time
     private val mlMutex = Mutex()
 
+    // Add these with your other UI Elements
+    private lateinit var progressContainer: LinearLayout
+    private lateinit var tvProgressText: TextView
+    private lateinit var progressBarHorizontal: ProgressBar
+
+    // Safety flag
+    private var isProcessing = false
+
     // Permission Launcher for Gallery Access
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -76,6 +85,10 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+
+        progressContainer = findViewById(R.id.progress_container)
+        tvProgressText = findViewById(R.id.tv_progress_text)
+        progressBarHorizontal = findViewById(R.id.progress_bar_horizontal)
 
         imageBox = GalleryApp.boxStore.boxFor(ImageEntity::class.java)
         faceBox = GalleryApp.boxStore.boxFor(FaceEntity::class.java)
@@ -150,12 +163,6 @@ class MainActivity : AppCompatActivity() {
                     val imageItem = Image(contentUri.toString(), dateModified.toString())
                     temporaryList.add(imageItem)
 
-                    // 3. Keep your ML background processing exactly as it is (with Mutex)
-                    launch(Dispatchers.IO) {
-                        mlMutex.withLock {
-                            processImage(contentUri, dateModified)
-                        }
-                    }
                 }
             }
 
@@ -346,10 +353,6 @@ class MainActivity : AppCompatActivity() {
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         return when (item.itemId) {
             R.id.action_search -> {
-                // Execute the clustering job to link faces to persons
-                runFacialRecognitionBatchJob()
-
-                // Then show the bottom sheet
                 showSearchBottomSheet()
                 true
             }
@@ -364,6 +367,14 @@ class MainActivity : AppCompatActivity() {
 
         val facesRecyclerView = view.findViewById<RecyclerView>(R.id.recycler_faces)
         val btnApply = view.findViewById<Button>(R.id.btn_apply)
+
+        // Add this right after you initialize facesRecyclerView and btnApply
+        val btnProcessImages = view.findViewById<Button>(R.id.btn_process_images)
+
+        btnProcessImages.setOnClickListener {
+            startImageProcessing()
+            bottomSheetDialog.dismiss() // Close the sheet so they can see the progress bar!
+        }
 
         facesRecyclerView.layoutManager = GridLayoutManager(this, 4)
 
@@ -457,6 +468,64 @@ class MainActivity : AppCompatActivity() {
         bottomSheetDialog.show()
     }
 
+    private fun startImageProcessing() {
+        if (isProcessing) {
+            Toast.makeText(this, "Already processing...", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        isProcessing = true
+        progressContainer.visibility = View.VISIBLE
+
+        lifecycleScope.launch(Dispatchers.IO) {
+            val totalImages = imageList.size
+            var processedCount = 0
+
+            // 1. Setup the initial progress bar state
+            withContext(Dispatchers.Main) {
+                progressBarHorizontal.max = totalImages
+                progressBarHorizontal.progress = 0
+                tvProgressText.text = "Processed 0 / $totalImages images"
+            }
+
+            // 2. Process every image one by one
+            for (image in imageList) {
+                // Note: Ensure '.imageUri' and '.dateModified' match the property names in your Image.kt data class
+                val uri = Uri.parse(image.imagePath)
+                val dateMod = image.imageTitle.toLongOrNull() ?: 0L
+
+                mlMutex.withLock {
+                    processImage(uri, dateMod)
+                }
+
+                processedCount++
+
+                // 3. Update the UI as it progresses
+                withContext(Dispatchers.Main) {
+                    progressBarHorizontal.progress = processedCount
+                    tvProgressText.text = "Processed $processedCount / $totalImages images"
+                }
+            }
+
+            // 4. Once all images are scanned, run the clustering algorithm automatically!
+            withContext(Dispatchers.Main) {
+                tvProgressText.text = "Clustering faces together..."
+            }
+
+            runFacialRecognitionBatchJob()
+
+            // 5. Processing is completely finished
+            withContext(Dispatchers.Main) {
+                isProcessing = false
+                Toast.makeText(this@MainActivity, "Processing is Complete!", Toast.LENGTH_LONG).show()
+
+                // Hide the progress bar after 3 seconds
+                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                    progressContainer.visibility = View.GONE
+                }, 3000)
+            }
+        }
+    }
     // Conceptual logic for your background job
     fun runFacialRecognitionBatchJob() {
         // FIX: Look for 0 (unassigned), not null!

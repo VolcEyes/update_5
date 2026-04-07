@@ -9,7 +9,7 @@
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="string:Select a Face"
+        android:text="Select a Face"
         android:textSize="24sp"
         android:textStyle="bold"
         android:layout_marginBottom="16dp"/>
@@ -27,5 +27,12 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="16dp"
         android:text="Apply Filter" />
+
+    <Button
+        android:id="@+id/btn_process_images"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Start Facial Recognition Scan"
+        android:layout_margin="16dp"/>
 
 </LinearLayout>
