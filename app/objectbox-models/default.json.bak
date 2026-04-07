@@ -5,7 +5,7 @@
   "entities": [
     {
       "id": "1:3810440697939320906",
-      "lastPropertyId": "4:3305289648551494113",
+      "lastPropertyId": "5:5983159629472776665",
       "name": "FaceEntity",
       "properties": [
         {
@@ -17,7 +17,9 @@
         {
           "id": "2:7453956018094388896",
           "name": "faceVector",
-          "type": 28
+          "indexId": "2:7120295677810774263",
+          "type": 28,
+          "flags": 8
         },
         {
           "id": "3:1620104294598833721",
@@ -31,6 +33,11 @@
           "type": 11,
           "flags": 520,
           "relationTarget": "ImageEntity"
+        },
+        {
+          "id": "5:5983159629472776665",
+          "name": "faceImagePath",
+          "type": 9
         }
       ],
       "relations": []
@@ -67,7 +74,7 @@
     }
   ],
   "lastEntityId": "2:2192951856395635762",
-  "lastIndexId": "1:8813050843469643132",
+  "lastIndexId": "2:7120295677810774263",
   "lastRelationId": "1:4870057968484322335",
   "lastSequenceId": "0:0",
   "modelVersion": 5,
