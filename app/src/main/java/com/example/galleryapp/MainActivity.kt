@@ -197,7 +197,7 @@ class MainActivity : AppCompatActivity() {
         // --- NEW STEP 4: Scale down for detection instead of tiling ---
         // InsightFace SCRFD works best on smaller images (around 640px).
         // This makes detection incredibly fast and uses less memory.
-        val maxDetectSize = 640f
+        val maxDetectSize = 1024f
         val scaleFactor = if (originalWidth > originalHeight) {
             maxDetectSize / originalWidth
         } else {
@@ -224,7 +224,7 @@ class MainActivity : AppCompatActivity() {
 
         detections.forEach { detection ->
             // Only process confident faces
-            if (detection.score > 0.6f) {
+            if (detection.score > 0.53f) {
                 val keypoints = detection.keypoints
 
                 // 1. Extract all 5 critical keypoints (10 floats) and map them BACK to the original high-res image
@@ -406,7 +406,12 @@ class MainActivity : AppCompatActivity() {
 
             if (selectedPerson != null) {
                 // SCENARIO A: The face belongs to a clustered Person
-                val photosOfPerson = selectedPerson.faces.mapNotNull { it.image.target }
+
+                // ADDED .distinctBy { it.imageUri } HERE to remove duplicates
+                val photosOfPerson = selectedPerson.faces
+                    .mapNotNull { it.image.target }
+                    .distinctBy { it.imageUri }
+
                 val filteredImages = photosOfPerson.map { entity ->
                     Image(entity.imageUri, entity.dateModified.toString())
                 }
@@ -419,6 +424,7 @@ class MainActivity : AppCompatActivity() {
                 bottomSheetDialog.dismiss()
 
             } else {
+                // ... rest of your code (SCENARIO B) remains the same
                 // SCENARIO B: The face is unassigned (Clustering skipped it)
                 // Fallback: Just display the single original image that this face belongs to!
                 val singleImageEntity = chosenFace?.image?.target
@@ -464,7 +470,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         // Using 0.60f to allow a slightly wider margin for error in matching
-        val clusterer = FaceClusterer(eps = 0.60f, minPts = 2)
+        val clusterer = FaceClusterer(eps = 0.62f, minPts = 2)
         val clusters = clusterer.cluster(allUnassignedFaces)
 
         Log.d("ClusterDebug", "DBSCAN finished: Formed ${clusters.size} clusters (Persons)")
