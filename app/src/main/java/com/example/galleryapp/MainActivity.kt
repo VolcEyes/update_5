@@ -37,6 +37,11 @@ import com.google.android.material.bottomsheet.BottomSheetDialog
 import androidx.recyclerview.widget.LinearLayoutManager
 import kotlin.math.sqrt
 
+import android.content.Context
+import android.graphics.ImageDecoder
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 
 class MainActivity : AppCompatActivity() {
@@ -46,7 +51,7 @@ class MainActivity : AppCompatActivity() {
     // ML Helpers
     private var faceLandmarkerHelper: FaceLandmarkerHelper? = null
     //private var faceNetHelper: FaceNetHelper? = null
-    private var onnxFaceHelper: OnnxFaceHelper? = null
+    private var faceNetHelper: OnnxFaceHelper? = null
 
     // Database Boxes
     private lateinit var imageBox: Box<ImageEntity>
@@ -111,7 +116,7 @@ class MainActivity : AppCompatActivity() {
                 Log.d("AppDebug", "Starting ML Models...")
                 faceLandmarkerHelper = FaceLandmarkerHelper(this@MainActivity)
                 //faceNetHelper = FaceNetHelper(this@MainActivity)
-                onnxFaceHelper = OnnxFaceHelper(this@MainActivity)
+                faceNetHelper = OnnxFaceHelper(this@MainActivity)
                 scrfdHelper= ScrfdHelper(this@MainActivity)
                 Log.d("AppDebug", "ML Models Loaded Successfully!")
 
@@ -254,7 +259,7 @@ class MainActivity : AppCompatActivity() {
                 val alignedAndCroppedFace = FaceAligner.alignAndCrop(bitmap, srcPoints)
 
                 // 3. Get the embedding vector using Buffalo_S
-                val faceVector = onnxFaceHelper?.getFaceVector(alignedAndCroppedFace)
+                val faceVector = faceNetHelper?.getFaceVector(alignedAndCroppedFace)
 
                 // Save cropped face to internal storage
                 val faceFileName =
@@ -339,7 +344,7 @@ class MainActivity : AppCompatActivity() {
         // Clean up ML resources to prevent memory leaks when the activity dies
         faceLandmarkerHelper?.clear()
         //faceNetHelper?.close()
-        onnxFaceHelper?.close()
+        faceNetHelper?.close()
     }
 
     //SEARCH MENU
@@ -363,7 +368,10 @@ class MainActivity : AppCompatActivity() {
     // 3. Displays the 2/3 screen
     private fun showSearchBottomSheet() {
         val bottomSheetDialog = BottomSheetDialog(this)
+        // Inflate the bottom sheet layout
         val view = layoutInflater.inflate(R.layout.bottom_sheet_search, null)
+        bottomSheetDialog.setContentView(view)
+        val btnScanNewImages = view.findViewById<Button>(R.id.btnScanNewImagesBottomSheet)
 
         val facesRecyclerView = view.findViewById<RecyclerView>(R.id.recycler_faces)
         val btnApply = view.findViewById<Button>(R.id.btn_apply)
@@ -413,29 +421,36 @@ class MainActivity : AppCompatActivity() {
             }
 
             // 2. Check if this face was successfully grouped into a "Person" by DBSCAN
-            val selectedPerson = chosenFace?.person?.target
+            val cachedPerson = chosenFace?.person?.target
 
-            if (selectedPerson != null) {
+            if (cachedPerson != null) {
                 // SCENARIO A: The face belongs to a clustered Person
 
-                // ADDED .distinctBy { it.imageUri } HERE to remove duplicates
-                val photosOfPerson = selectedPerson.faces
-                    .mapNotNull { it.image.target }
-                    .distinctBy { it.imageUri }
+                // --- FIX: RE-FETCH FROM DB TO BYPASS CACHE ---
+                val freshPerson = personBox.get(cachedPerson.id)
 
-                val filteredImages = photosOfPerson.map { entity ->
-                    Image(entity.imageUri, entity.dateModified.toString())
+                if (freshPerson != null) {
+                    // Use freshPerson instead of the cached selectedPerson
+                    // ADDED .distinctBy { it.imageUri } HERE to remove duplicates
+                    val photosOfPerson = freshPerson.faces
+                        .mapNotNull { it.image.target }
+                        .distinctBy { it.imageUri }
+
+                    val filteredImages = photosOfPerson.map { entity ->
+                        Image(entity.imageUri, entity.dateModified.toString())
+                    }
+
+                    imageList.clear()
+                    imageList.addAll(filteredImages)
+                    imageAdapter.notifyDataSetChanged()
+
+                    Toast.makeText(this@MainActivity, "Found ${filteredImages.size} photos of this person", Toast.LENGTH_SHORT).show()
+                    bottomSheetDialog.dismiss()
+                } else {
+                    Toast.makeText(this@MainActivity, "Error: Could not load person details.", Toast.LENGTH_SHORT).show()
                 }
 
-                imageList.clear()
-                imageList.addAll(filteredImages)
-                imageAdapter.notifyDataSetChanged()
-
-                Toast.makeText(this@MainActivity, "Found ${filteredImages.size} photos of this person", Toast.LENGTH_SHORT).show()
-                bottomSheetDialog.dismiss()
-
             } else {
-                // ... rest of your code (SCENARIO B) remains the same
                 // SCENARIO B: The face is unassigned (Clustering skipped it)
                 // Fallback: Just display the single original image that this face belongs to!
                 val singleImageEntity = chosenFace?.image?.target
@@ -464,6 +479,17 @@ class MainActivity : AppCompatActivity() {
         val bottomSheetBehavior = BottomSheetBehavior.from(view.parent as View)
         bottomSheetBehavior.state = BottomSheetBehavior.STATE_EXPANDED
         bottomSheetBehavior.skipCollapsed = true
+
+        btnScanNewImages?.setOnClickListener {
+            // Ensure you have requested READ_MEDIA_IMAGES (Android 13+)
+            // or READ_EXTERNAL_STORAGE (Android 12-) permissions before calling this!
+            Toast.makeText(this, "Scanning for new images in background...", Toast.LENGTH_SHORT).show()
+
+            scanNewlyAddedImages(this)
+
+            // Optional: Close the bottom sheet automatically after clicking
+            // bottomSheetDialog.dismiss()
+        }
 
         bottomSheetDialog.show()
     }
@@ -526,6 +552,117 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
+
+    private fun scanNewlyAddedImages(context: Context) {
+        lifecycleScope.launch(Dispatchers.IO) {
+            val prefs = context.getSharedPreferences("GalleryPrefs", Context.MODE_PRIVATE)
+            // Retrieve the timestamp of the last scan (0L if it's the first time)
+            val lastScanTime = prefs.getLong("last_scan_time", 0L)
+            var maxScannedTime = lastScanTime
+
+            val newFacesToCluster = mutableListOf<FaceEntity>()
+
+            // 1. Query MediaStore for images added strictly AFTER lastScanTime
+            val projection = arrayOf(
+                MediaStore.Images.Media._ID,
+                MediaStore.Images.Media.DATE_ADDED
+            )
+            val selection = "${MediaStore.Images.Media.DATE_ADDED} > ?"
+            val selectionArgs = arrayOf((lastScanTime / 1000).toString()) // MediaStore date is in seconds
+            val sortOrder = "${MediaStore.Images.Media.DATE_ADDED} ASC"
+
+            context.contentResolver.query(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                projection,
+                selection,
+                selectionArgs,
+                sortOrder
+            )?.use { cursor ->
+                val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
+                val dateAddedColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_ADDED)
+
+                while (cursor.moveToNext()) {
+                    val id = cursor.getLong(idColumn)
+                    val dateAdded = cursor.getLong(dateAddedColumn) * 1000 // Convert back to milliseconds
+
+                    val contentUri = Uri.withAppendedPath(
+                        MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                        id.toString()
+                    )
+
+                    if (dateAdded > maxScannedTime) {
+                        maxScannedTime = dateAdded
+                    }
+
+                    // 2. Load the image bitmap
+                    val bitmap = loadBitmapFromUri(context, contentUri) ?: continue
+
+                    // 3. Save the base ImageEntity to ObjectBox
+                    val imageEntity = ImageEntity(imageUri = contentUri.toString(), dateModified = dateAdded)
+                    imageBox.put(imageEntity)
+
+                    // 4. Run Detection (SCRFD)
+                    val detections = scrfdHelper?.detectFaces(bitmap)
+
+                    if (detections != null) {
+                        for (detection in detections) {
+                            // 5. Align & Crop
+                            val alignedFace = FaceAligner.alignAndCrop(bitmap, detection.keypoints)
+
+                            // 6. Extract Vector (FaceNet)
+                            val faceVector = faceNetHelper?.getFaceVector(alignedFace) ?: continue
+
+                            // 7. Create and save FaceEntity to DB
+                            val faceEntity = FaceEntity(
+                                faceVector = faceVector,
+                                boundingBox = detection.boundingBox.joinToString(",")
+                            )
+                            faceEntity.image.target = imageEntity
+
+                            faceBox.put(faceEntity) // Save so it gets a real ID
+                            newFacesToCluster.add(faceEntity)
+                        }
+                    }
+                }
+            }
+
+            // 8. Trigger Incremental DBSCAN if we extracted new faces
+            if (newFacesToCluster.isNotEmpty()) {
+                // Initialize the clusterer locally on the background thread
+                val clusterer = FaceClusterer(faceBox, personBox, eps = 0.62f, minPts = 2)
+
+                clusterer.enqueueFacesForClustering(newFacesToCluster)
+                clusterer.processClusteringQueue()
+            }
+
+            // 9. Save the newest timestamp so we skip these images next time
+            prefs.edit().putLong("last_scan_time", maxScannedTime).apply()
+
+            // 10. Notify UI that the background job is done
+            withContext(Dispatchers.Main) {
+                Toast.makeText(context, "Scan Complete! Found and clustered ${newFacesToCluster.size} faces.", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    // Helper to safely load Bitmaps across different Android versions
+    private fun loadBitmapFromUri(context: Context, uri: Uri): Bitmap? {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                val source = ImageDecoder.createSource(context.contentResolver, uri)
+                ImageDecoder.decodeBitmap(source) { decoder, _, _ ->
+                    decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE // Prevents hardware bitmap crashes with ONNX
+                }
+            } else {
+                @Suppress("DEPRECATION")
+                MediaStore.Images.Media.getBitmap(context.contentResolver, uri)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        }
+    }
+
     // Conceptual logic for your background job
     fun runFacialRecognitionBatchJob() {
         // FIX: Look for 0 (unassigned), not null!
@@ -539,21 +676,23 @@ class MainActivity : AppCompatActivity() {
         }
 
         // Using 0.60f to allow a slightly wider margin for error in matching
-        val clusterer = FaceClusterer(eps = 0.62f, minPts = 2)
-        val clusters = clusterer.cluster(allUnassignedFaces)
+// 1. Initialize with your ObjectBox instances
+        val clusterer = FaceClusterer(
+            faceBox = faceBox,
+            personBox = personBox,
+            eps = 0.62f,
+            minPts = 2
+        )
 
-        Log.d("ClusterDebug", "DBSCAN finished: Formed ${clusters.size} clusters (Persons)")
+// 2. Add your extracted faces to the queue
+        clusterer.enqueueFacesForClustering(allUnassignedFaces)
 
-        for (cluster in clusters) {
-            val person = PersonEntity(coverFaceImagePath = cluster.first().faceImagePath)
-            val personId = personBox.put(person)
-            Log.d("ClusterDebug", "Saved Person ID $personId with ${cluster.size} photos")
+// 3. Run the incremental DBSCAN
+// This handles EVERYTHING: finding neighbors, making new PersonEntities,
+// setting thumbnails, and saving to the database.
+        clusterer.processClusteringQueue()
 
-            for (face in cluster) {
-                face.person.target = person
-                faceBox.put(face) // Save the updated face back to the database
-            }
-        }
+        Log.d("ClusterDebug", "Incremental DBSCAN finished processing queue.")
     }
 
     // Helper math function to calculate if two faces belong to the same person
