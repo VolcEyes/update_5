@@ -595,7 +595,7 @@ class MainActivity : AppCompatActivity() {
                 setCustomCoverFaceForPerson(personId, selectedPreviewFace!!.faceImagePath)
 
                 // 2. Close the second sheet
-                //bottomSheetDialog.dismiss()
+                //bottomSheetDialog.dismiss()///
 
                 // 3. Re-open the first sheet to refresh the UI with the new preview
                 showSearchBottomSheet()
