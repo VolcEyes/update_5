@@ -378,6 +378,7 @@ class MainActivity : AppCompatActivity() {
 
         // Add this right after you initialize facesRecyclerView and btnApply
         val btnProcessImages = view.findViewById<Button>(R.id.btn_process_images)
+        val btnViewTotalFaces = view.findViewById<Button>(R.id.btn_view_total_faces) // NEW BUTTON
 
         btnProcessImages.setOnClickListener {
             startImageProcessing()
@@ -394,15 +395,15 @@ class MainActivity : AppCompatActivity() {
 
         // 2. Extract exactly ONE cover face for each unique person to show in the grid
         for (person in allPersons) {
-            val coverFace = person.faces.firstOrNull()
-            if (coverFace != null) {
-                uniqueFacesToDisplay.add(coverFace)
+            val uniqueImageCount = person.faces.map { it.image.targetId }.distinct().size
+
+            if (uniqueImageCount >= 3) {
+                val coverFace = person.faces.firstOrNull()
+                if (coverFace != null) {
+                    uniqueFacesToDisplay.add(coverFace)
+                }
             }
         }
-
-        // 3. (Optional) Also grab any faces that failed to cluster, so they still appear as options
-        val unclusteredFaces = faceBox.query().equal(FaceEntity_.personId, 0L).build().find()
-        uniqueFacesToDisplay.addAll(unclusteredFaces)
 
         // 4. Setup the Adapter
         var chosenFace: FaceEntity? = null
@@ -410,6 +411,14 @@ class MainActivity : AppCompatActivity() {
             chosenFace = selectedFace // Save the face the user clicked
         }
         facesRecyclerView.adapter = faceAdapter
+
+        btnViewTotalFaces.setOnClickListener {
+            val personId = chosenFace?.person?.targetId
+            if (personId != null) {
+                showPersonFacesBottomSheet(personId)
+                // Optional: bottomSheetDialog.dismiss() if you want to close the first sheet
+            }
+        }
 
         // ... Keep your btnApply.setOnClickListener code exactly as it is right here ...
         // 4. Apply button logic
@@ -550,6 +559,63 @@ class MainActivity : AppCompatActivity() {
                     progressContainer.visibility = View.GONE
                 }, 3000)
             }
+        }
+    }
+
+    private fun showPersonFacesBottomSheet(personId: Long) {
+        val bottomSheetDialog = BottomSheetDialog(this)
+        val view = layoutInflater.inflate(R.layout.bottom_sheet_person_faces, null)
+        bottomSheetDialog.setContentView(view)
+
+        val recyclerView = view.findViewById<RecyclerView>(R.id.recycler_all_faces)
+        val btnSetPreview = view.findViewById<Button>(R.id.btn_set_preview)
+
+        recyclerView.layoutManager = GridLayoutManager(this, 4)
+
+        // 1. Fetch the person and all their grouped faces
+        val person = personBox.get(personId) ?: return
+        val allFacesOfPerson = person.faces.toList()
+
+        // 2. Setup the adapter (reusing your existing FaceAdapter)
+        var selectedPreviewFace: FaceEntity? = null
+        val faceAdapter = FaceAdapter(this, allFacesOfPerson) { selectedFace ->
+            selectedPreviewFace = selectedFace
+            btnSetPreview.isEnabled = true // <-- Change .enabled to .isEnabled
+        }
+        recyclerView.adapter = faceAdapter
+
+        // 3. Handle saving the new cover photo
+        btnSetPreview.setOnClickListener {
+            if (selectedPreviewFace != null) {
+                setCustomCoverFaceForPerson(personId, selectedPreviewFace!!.faceImagePath)
+                bottomSheetDialog.dismiss()
+            }
+        }
+
+        // 4. Show the dialog at 2/3 height
+        val screenHeight = resources.displayMetrics.heightPixels
+        val twoThirdsHeight = (screenHeight * 0.66).toInt()
+        view.layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, twoThirdsHeight)
+
+        val bottomSheetBehavior = BottomSheetBehavior.from(view.parent as View)
+        bottomSheetBehavior.state = BottomSheetBehavior.STATE_EXPANDED
+        bottomSheetBehavior.skipCollapsed = true
+
+        bottomSheetDialog.show()
+    }
+
+    fun setCustomCoverFaceForPerson(personId: Long, chosenFacePath: String) {
+        // Fetch the fresh Person entity from ObjectBox
+        val person = personBox.get(personId)
+
+        if (person != null) {
+            // Update the string path to point to the user's favorite face crop
+            person.coverFaceImagePath = chosenFacePath
+
+            // Save it back to the database
+            personBox.put(person)
+
+            Toast.makeText(this, "Preview photo updated successfully!", Toast.LENGTH_SHORT).show()
         }
     }
 

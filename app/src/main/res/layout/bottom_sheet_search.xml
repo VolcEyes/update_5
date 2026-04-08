@@ -42,4 +42,11 @@
         android:text="Scan New Images"
         android:layout_margin="16dp" />
 
+    <Button
+        android:id="@+id/btn_view_total_faces"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="View total faces of this person"
+        android:visibility="gone" />
+
 </LinearLayout>
