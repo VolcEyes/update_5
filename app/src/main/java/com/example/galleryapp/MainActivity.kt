@@ -398,7 +398,7 @@ class MainActivity : AppCompatActivity() {
             val uniqueImageCount = person.faces.map { it.image.targetId }.distinct().size
 
             if (uniqueImageCount >= 3) {
-                val coverFace = person.faces.firstOrNull()
+                var coverFace = person.faces.find { it.faceImagePath == person.coverFaceImagePath }
                 if (coverFace != null) {
                     uniqueFacesToDisplay.add(coverFace)
                 }
@@ -415,8 +415,8 @@ class MainActivity : AppCompatActivity() {
         btnViewTotalFaces.setOnClickListener {
             val personId = chosenFace?.person?.targetId
             if (personId != null) {
+                bottomSheetDialog.dismiss()
                 showPersonFacesBottomSheet(personId)
-                // Optional: bottomSheetDialog.dismiss() if you want to close the first sheet
             }
         }
 
@@ -573,8 +573,12 @@ class MainActivity : AppCompatActivity() {
         recyclerView.layoutManager = GridLayoutManager(this, 4)
 
         // 1. Fetch the person and all their grouped faces
+// 1. Fetch the person and all their grouped faces
         val person = personBox.get(personId) ?: return
-        val allFacesOfPerson = person.faces.toList()
+
+        // FIX: Filter out the duplicate bounding boxes.
+        // This ensures only ONE face crop is shown per unique photograph.
+        val allFacesOfPerson = person.faces.distinctBy { it.image.targetId }
 
         // 2. Setup the adapter (reusing your existing FaceAdapter)
         var selectedPreviewFace: FaceEntity? = null
@@ -587,8 +591,14 @@ class MainActivity : AppCompatActivity() {
         // 3. Handle saving the new cover photo
         btnSetPreview.setOnClickListener {
             if (selectedPreviewFace != null) {
+                // 1. Save to database
                 setCustomCoverFaceForPerson(personId, selectedPreviewFace!!.faceImagePath)
-                bottomSheetDialog.dismiss()
+
+                // 2. Close the second sheet
+                //bottomSheetDialog.dismiss()
+
+                // 3. Re-open the first sheet to refresh the UI with the new preview
+                showSearchBottomSheet()
             }
         }
 // ... [Adapter setup code above] ...
