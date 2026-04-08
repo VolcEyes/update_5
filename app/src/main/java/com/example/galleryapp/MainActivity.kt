@@ -63,7 +63,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var imageAdapter: ImageAdapter
 
     private var scrfdHelper: ScrfdHelper? = null
-    private var imageList = ArrayList<Image>()
+    private var imageList = ArrayList<Image>()//
 
     // This ensures only 3 images are processed by the ML models at the exact same time
     private val mlMutex = Mutex()
