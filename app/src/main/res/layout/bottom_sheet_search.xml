@@ -22,10 +22,18 @@
         android:clipToPadding="false" />
 
     <Button
+        android:id="@+id/btn_view_total_faces"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="View total faces of this person"
+        android:visibility="visible" />
+
+    <Button
         android:id="@+id/btn_apply"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="16dp"
+        android:layout_marginTop="8dp"
         android:text="Apply Filter" />
 
     <Button
@@ -41,12 +49,5 @@
         android:layout_height="wrap_content"
         android:text="Scan New Images"
         android:layout_margin="16dp" />
-
-    <Button
-        android:id="@+id/btn_view_total_faces"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="View total faces of this person"
-        android:visibility="gone" />
 
 </LinearLayout>

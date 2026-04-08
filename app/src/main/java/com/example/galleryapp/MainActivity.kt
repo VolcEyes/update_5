@@ -591,17 +591,30 @@ class MainActivity : AppCompatActivity() {
                 bottomSheetDialog.dismiss()
             }
         }
+// ... [Adapter setup code above] ...
 
-        // 4. Show the dialog at 2/3 height
-        val screenHeight = resources.displayMetrics.heightPixels
-        val twoThirdsHeight = (screenHeight * 0.66).toInt()
-        view.layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, twoThirdsHeight)
+        // 1. Set content view FIRST
+        bottomSheetDialog.setContentView(view)
 
-        val bottomSheetBehavior = BottomSheetBehavior.from(view.parent as View)
-        bottomSheetBehavior.state = BottomSheetBehavior.STATE_EXPANDED
-        bottomSheetBehavior.skipCollapsed = true
+        // 2. Safely find the internal BottomSheet FrameLayout
+        val bottomSheet = bottomSheetDialog.findViewById<View>(com.google.android.material.R.id.design_bottom_sheet)
+
+        if (bottomSheet != null) {
+            val behavior = BottomSheetBehavior.from(bottomSheet)
+            val screenHeight = resources.displayMetrics.heightPixels
+            val twoThirdsHeight = (screenHeight * 0.66).toInt()
+
+            // 3. Apply the height to the FrameLayout correctly
+            val layoutParams = bottomSheet.layoutParams
+            layoutParams.height = twoThirdsHeight
+            bottomSheet.layoutParams = layoutParams
+
+            behavior.state = BottomSheetBehavior.STATE_EXPANDED
+            behavior.skipCollapsed = true
+        }
 
         bottomSheetDialog.show()
+
     }
 
     fun setCustomCoverFaceForPerson(personId: Long, chosenFacePath: String) {
