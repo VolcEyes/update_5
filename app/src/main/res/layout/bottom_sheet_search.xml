@@ -50,4 +50,12 @@
         android:text="Scan New Images"
         android:layout_margin="16dp" />
 
+    <Button
+        android:id="@+id/btn_merge_people"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Merge 2 Selected People"
+        android:layout_margin="16dp"
+        android:enabled="false" />
+
 </LinearLayout>

@@ -400,10 +400,34 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // 4. Setup the Adapter
+        val btnMergePeople = view.findViewById<Button>(R.id.btn_merge_people)
+
         var chosenFace: FaceEntity? = null
+        val selectedFacesForMerge = mutableListOf<FaceEntity>()
+
         val faceAdapter = FaceAdapter(this, uniqueFacesToDisplay) { selectedFace ->
-            chosenFace = selectedFace // Save the face the user clicked
+            // 1. Keep your existing logic for viewing a single person
+            chosenFace = selectedFace
+
+            // 2. Handle Multi-Selection for Merging
+            if (selectedFacesForMerge.contains(selectedFace)) {
+                // If they tap an already selected face, un-select it
+                selectedFacesForMerge.remove(selectedFace)
+            } else {
+                if (selectedFacesForMerge.size < 2) {
+                    // Add to selection if they haven't picked 2 yet
+                    selectedFacesForMerge.add(selectedFace)
+                } else {
+                    // If they tap a 3rd face, replace the 2nd one
+                    selectedFacesForMerge[1] = selectedFace
+                }
+            }
+
+            // 3. Enable the Merge button ONLY when exactly 2 people are selected
+            btnMergePeople.isEnabled = selectedFacesForMerge.size == 2
+
+            // Note: If you want visual highlighting (like a blue border around selected faces),
+            // you will need to pass `selectedFacesForMerge` into your FaceAdapter and call .notifyDataSetChanged() here.
         }
         facesRecyclerView.adapter = faceAdapter
 
@@ -470,6 +494,28 @@ class MainActivity : AppCompatActivity() {
                     bottomSheetDialog.dismiss()
                 } else {
                     Toast.makeText(this@MainActivity, "Error: Could not load the image.", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+
+        btnMergePeople.setOnClickListener {
+            if (selectedFacesForMerge.size == 2) {
+                // Get the Person IDs belonging to the 2 tapped faces
+                val person1Id = selectedFacesForMerge[0].person.targetId
+                val person2Id = selectedFacesForMerge[1].person.targetId
+
+                if (person1Id != 0L && person2Id != 0L && person1Id != person2Id) {
+                    // 1. Run the merge function
+                    userMergePersons(person1Id, person2Id)
+
+                    // 2. Alert the user
+                    Toast.makeText(this@MainActivity, "Profiles Merged Successfully!", Toast.LENGTH_SHORT).show()
+
+                    // 3. Close and instantly re-open the bottom sheet to refresh the UI
+                    bottomSheetDialog.dismiss()
+                    showSearchBottomSheet()
+                } else {
+                    Toast.makeText(this@MainActivity, "Cannot merge the same person.", Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -767,6 +813,22 @@ class MainActivity : AppCompatActivity() {
         clusterer.processClusteringQueue()
 
         Log.d("ClusterDebug", "Incremental DBSCAN finished processing queue.")
+    }
+
+    private fun userMergePersons(primaryPersonId: Long, duplicatePersonId: Long) {
+        val primaryPerson = personBox.get(primaryPersonId)
+        val duplicatePerson = personBox.get(duplicatePersonId)
+
+        if (primaryPerson != null && duplicatePerson != null) {
+            // Move all faces from the duplicate cluster to the primary cluster
+            for (face in duplicatePerson.faces) {
+                face.person.target = primaryPerson
+                faceBox.put(face)
+            }
+
+            // Delete the old, now-empty person profile
+            personBox.remove(duplicatePerson)
+        }
     }
 
     // Helper math function to calculate if two faces belong to the same person
