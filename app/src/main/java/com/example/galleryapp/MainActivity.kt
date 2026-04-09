@@ -49,7 +49,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var progressBar: ProgressBar
 
     // ML Helpers
-    private var faceLandmarkerHelper: FaceLandmarkerHelper? = null
     //private var faceNetHelper: FaceNetHelper? = null
     private var faceNetHelper: OnnxFaceHelper? = null
 
@@ -114,8 +113,6 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch(Dispatchers.IO) {
             try {
                 Log.d("AppDebug", "Starting ML Models...")
-                faceLandmarkerHelper = FaceLandmarkerHelper(this@MainActivity)
-                //faceNetHelper = FaceNetHelper(this@MainActivity)
                 faceNetHelper = OnnxFaceHelper(this@MainActivity)
                 scrfdHelper= ScrfdHelper(this@MainActivity)
                 Log.d("AppDebug", "ML Models Loaded Successfully!")
@@ -342,8 +339,6 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         // Clean up ML resources to prevent memory leaks when the activity dies
-        faceLandmarkerHelper?.clear()
-        //faceNetHelper?.close()
         faceNetHelper?.close()
     }
 

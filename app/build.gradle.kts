@@ -85,7 +85,7 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.test.manifest)
     implementation("io.objectbox:objectbox-kotlin:5.4.1")
     // MediaPipe Face Landmarker
-    implementation("com.google.mediapipe:tasks-vision:0.10.33") // Use the latest available stable version
+    //implementation("com.google.mediapipe:tasks-vision:0.10.33") // Use the latest available stable version
 
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.17.1")
 
