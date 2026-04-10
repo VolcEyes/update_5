@@ -483,58 +483,104 @@ class MainActivity : AppCompatActivity() {
         // ... Keep your btnApply.setOnClickListener code exactly as it is right here ...
         // 4. Apply button logic
         btnApply.setOnClickListener {
-            // 1. Did the user actually tap a face? If not, stop here.
             if (chosenFace == null) {
                 Toast.makeText(this@MainActivity, "Please tap a face first.", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
 
-            // 2. Check if this face was successfully grouped into a "Person" by DBSCAN
-            val cachedPerson = chosenFace?.person?.target
+            lifecycleScope.launch(Dispatchers.IO) {
+                val cachedPerson = chosenFace?.person?.target
 
-            if (cachedPerson != null) {
-                // SCENARIO A: The face belongs to a clustered Person
+                if (cachedPerson != null) {
+                    // SCENARIO A: The face belongs to a clustered Person
+                    val freshPerson = personBox.get(cachedPerson.id)
 
-                // --- FIX: RE-FETCH FROM DB TO BYPASS CACHE ---
-                val freshPerson = personBox.get(cachedPerson.id)
+                    if (freshPerson != null) {
+                        val photosOfPerson = freshPerson.faces
+                            .mapNotNull { it.image.target }
+                            .distinctBy { it.imageUri }
 
-                if (freshPerson != null) {
-                    // Use freshPerson instead of the cached selectedPerson
-                    // ADDED .distinctBy { it.imageUri } HERE to remove duplicates
-                    val photosOfPerson = freshPerson.faces
-                        .mapNotNull { it.image.target }
-                        .distinctBy { it.imageUri }
+                        val validPhotos = mutableListOf<ImageEntity>()
+                        val ghostPhotos = mutableListOf<ImageEntity>()
 
-                    val filteredImages = photosOfPerson.map { entity ->
-                        Image(entity.imageUri, entity.dateModified.toString())
+                        // 1. Verify which images are physically accessible
+                        for (entity in photosOfPerson) {
+                            if (isImageUriValid(entity.imageUri)) {
+                                validPhotos.add(entity)
+                            } else {
+                                ghostPhotos.add(entity)
+                            }
+                        }
+
+                        // 2. Auto-heal: Delete ghost records and empty clusters
+                        if (ghostPhotos.isNotEmpty()) {
+                            for (ghost in ghostPhotos) {
+                                for (face in ghost.faces) {
+                                    val person = face.person.target
+
+                                    // Delete the physical face crop
+                                    try { java.io.File(face.faceImagePath).delete() } catch(e: Exception){}
+                                    faceBox.remove(face)
+
+                                    // Clean up the Person cluster so it doesn't leave an empty bubble
+                                    if (person != null) {
+                                        person.faces.remove(face)
+                                        if (person.faces.isEmpty()) {
+                                            // Destroy the cluster if no faces are left
+                                            personBox.remove(person)
+                                        } else if (person.coverFaceImagePath == face.faceImagePath) {
+                                            // If we just deleted their cover photo, pick a new one
+                                            person.coverFaceImagePath = person.faces.first().faceImagePath
+                                            personBox.put(person)
+                                        }
+                                    }
+                                }
+                                imageBox.remove(ghost)
+                            }
+                        }
+
+                        val filteredImages = validPhotos.map { entity ->
+                            Image(entity.imageUri, entity.dateModified.toString())
+                        }
+
+                        withContext(Dispatchers.Main) {
+                            imageList.clear()
+                            imageList.addAll(filteredImages)
+                            imageAdapter.notifyDataSetChanged()
+
+                            Toast.makeText(this@MainActivity, "Found ${filteredImages.size} photos of this person", Toast.LENGTH_SHORT).show()
+                            bottomSheetDialog.dismiss()
+                        }
+                    } else {
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(this@MainActivity, "Error: Could not load person details.", Toast.LENGTH_SHORT).show()
+                        }
                     }
 
-                    imageList.clear()
-                    imageList.addAll(filteredImages)
-                    imageAdapter.notifyDataSetChanged()
-
-                    Toast.makeText(this@MainActivity, "Found ${filteredImages.size} photos of this person", Toast.LENGTH_SHORT).show()
-                    bottomSheetDialog.dismiss()
                 } else {
-                    Toast.makeText(this@MainActivity, "Error: Could not load person details.", Toast.LENGTH_SHORT).show()
-                }
+                    // SCENARIO B: Unclustered face (Fallback)
+                    val singleImageEntity = chosenFace?.image?.target
 
-            } else {
-                // SCENARIO B: The face is unassigned (Clustering skipped it)
-                // Fallback: Just display the single original image that this face belongs to!
-                val singleImageEntity = chosenFace?.image?.target
+                    if (singleImageEntity != null) {
+                        val isValid = isImageUriValid(singleImageEntity.imageUri)
 
-                if (singleImageEntity != null) {
-                    val singleImage = Image(singleImageEntity.imageUri, singleImageEntity.dateModified.toString())
-
-                    imageList.clear()
-                    imageList.add(singleImage)
-                    imageAdapter.notifyDataSetChanged()
-
-                    Toast.makeText(this@MainActivity, "Showing 1 unclustered photo", Toast.LENGTH_SHORT).show()
-                    bottomSheetDialog.dismiss()
-                } else {
-                    Toast.makeText(this@MainActivity, "Error: Could not load the image.", Toast.LENGTH_SHORT).show()
+                        withContext(Dispatchers.Main) {
+                            if (isValid) {
+                                val singleImage = Image(singleImageEntity.imageUri, singleImageEntity.dateModified.toString())
+                                imageList.clear()
+                                imageList.add(singleImage)
+                                imageAdapter.notifyDataSetChanged()
+                                Toast.makeText(this@MainActivity, "Showing 1 unclustered photo", Toast.LENGTH_SHORT).show()
+                            } else {
+                                Toast.makeText(this@MainActivity, "This photo was deleted from the device.", Toast.LENGTH_SHORT).show()
+                            }
+                            bottomSheetDialog.dismiss()
+                        }
+                    } else {
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(this@MainActivity, "Error: Could not load the image.", Toast.LENGTH_SHORT).show()
+                        }
+                    }
                 }
             }
         }
@@ -762,8 +808,6 @@ class MainActivity : AppCompatActivity() {
             val lastScanTime = prefs.getLong("last_scan_time", 0L)
             var maxScannedTime = lastScanTime
 
-            val newFacesToCluster = mutableListOf<FaceEntity>()
-
             // 1. Query MediaStore for images added strictly AFTER lastScanTime
             val projection = arrayOf(
                 MediaStore.Images.Media._ID,
@@ -772,6 +816,8 @@ class MainActivity : AppCompatActivity() {
             val selection = "${MediaStore.Images.Media.DATE_ADDED} > ?"
             val selectionArgs = arrayOf((lastScanTime / 1000).toString()) // MediaStore date is in seconds
             val sortOrder = "${MediaStore.Images.Media.DATE_ADDED} ASC"
+
+            var newlyProcessedCount = 0
 
             context.contentResolver.query(
                 MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
@@ -796,57 +842,37 @@ class MainActivity : AppCompatActivity() {
                         maxScannedTime = dateAdded
                     }
 
-                    // 2. Load the image bitmap
-                    val bitmap = loadBitmapFromUri(context, contentUri) ?: continue
-
-                    // 3. Save the base ImageEntity to ObjectBox
-                    val imageEntity = ImageEntity(imageUri = contentUri.toString(), dateModified = dateAdded)
-                    imageBox.put(imageEntity)
-
-                    // 4. Run Detection (SCRFD)
-                    val detections = scrfdHelper?.detectFaces(bitmap)
-
-                    if (detections != null) {
-                        for (detection in detections) {
-                            // 5. Align & Crop
-                            val alignedFace = FaceAligner.alignAndCrop(bitmap, detection.keypoints)
-
-                            // 6. Extract Vector (FaceNet)
-                            val faceVector = faceNetHelper?.getFaceVector(alignedFace) ?: continue
-
-                            // 7. Create and save FaceEntity to DB
-                            val faceEntity = FaceEntity(
-                                faceVector = faceVector,
-                                boundingBox = detection.boundingBox.joinToString(",")
-                            )
-                            faceEntity.image.target = imageEntity
-
-                            faceBox.put(faceEntity) // Save so it gets a real ID
-                            newFacesToCluster.add(faceEntity)
-                        }
+                    // --- THE FIX ---
+                    // Reuse your robust processImage() function!
+                    // It handles downscaling, prevents duplicates, extracts the face vector,
+                    // securely saves the cropped JPG to disk, and saves the FaceEntity to the DB.
+                    mlMutex.withLock {
+                        processImage(contentUri, dateAdded)
                     }
+                    newlyProcessedCount++
                 }
             }
 
-            // 8. Trigger Incremental DBSCAN if we extracted new faces
-            if (newFacesToCluster.isNotEmpty()) {
-                // Initialize the clusterer locally on the background thread
-                val clusterer = FaceClusterer(faceBox, personBox, eps = 0.58f, minPts = 3)
+            if (newlyProcessedCount > 0) {
+                // 2. Trigger your Incremental DBSCAN
+                // runFacialRecognitionBatchJob() will automatically find all the new FaceEntities
+                // processImage() just created (because their personId == 0) and cluster them!
+                runFacialRecognitionBatchJob()
 
-                clusterer.enqueueFacesForClustering(newFacesToCluster)
-                clusterer.processClusteringQueue()
-            }
+                // 3. Save the newest timestamp so we skip these images next time
+                prefs.edit().putLong("last_scan_time", maxScannedTime).apply()
 
-            // 9. Save the newest timestamp so we skip these images next time
-            prefs.edit().putLong("last_scan_time", maxScannedTime).apply()
-
-            // 10. Notify UI that the background job is done
-            withContext(Dispatchers.Main) {
-                Toast.makeText(context, "Scan Complete! Found and clustered ${newFacesToCluster.size} faces.", Toast.LENGTH_SHORT).show()
+                // Notify UI that the background job is done
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "Scan Complete! Extracted & clustered $newlyProcessedCount new images.", Toast.LENGTH_SHORT).show()
+                }
+            } else {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "No new images found to scan.", Toast.LENGTH_SHORT).show()
+                }
             }
         }
     }
-
     // Helper to safely load Bitmaps across different Android versions
     private fun loadBitmapFromUri(context: Context, uri: Uri): Bitmap? {
         return try {
@@ -1089,5 +1115,47 @@ class MainActivity : AppCompatActivity() {
 
         recyclerView.adapter = adapter
         bottomSheetDialog.show()
+    }
+
+    private fun isImageUriValid(uriString: String): Boolean {
+        return try {
+            val uri = Uri.parse(uriString)
+
+            // 1. Android 10+ (API 29) "Recycle Bin" Check
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val projection = arrayOf(
+                    MediaStore.Images.Media.IS_TRASHED,
+                    MediaStore.Images.Media.IS_PENDING
+                )
+
+                contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        val isTrashed = cursor.getInt(cursor.getColumnIndexOrThrow(MediaStore.Images.Media.IS_TRASHED)) == 1
+                        val isPending = cursor.getInt(cursor.getColumnIndexOrThrow(MediaStore.Images.Media.IS_PENDING)) == 1
+
+                        // If the gallery put it in the trash bin, consider it dead.
+                        if (isTrashed || isPending) {
+                            return false
+                        }
+                    } else {
+                        return false // The database record is completely gone
+                    }
+                }
+            } else {
+                // Android 9 and below (No trash bin feature)
+                contentResolver.query(uri, arrayOf(MediaStore.Images.Media._ID), null, null, null)?.use { cursor ->
+                    if (!cursor.moveToFirst()) return false
+                }
+            }
+
+            // 2. Final Physical Check (Ensures file isn't 0 bytes or corrupted)
+            contentResolver.openInputStream(uri)?.use { stream ->
+                return stream.available() > 0
+            } ?: false
+
+        } catch (e: Exception) {
+            // Any SecurityException or FileNotFoundException means the file is completely inaccessible.
+            false
+        }
     }
 }
