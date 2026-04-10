@@ -37,6 +37,14 @@
         android:text="Apply Filter" />
 
     <Button
+        android:id="@+id/btn_view_merge_history"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="View Merged Persons (Undo)"
+        android:layout_marginHorizontal="16dp"
+        android:layout_marginBottom="16dp" />
+
+    <Button
         android:id="@+id/btn_process_images"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"

@@ -103,9 +103,43 @@
         }
       ],
       "relations": []
+    },
+    {
+      "id": "4:3862452737166899717",
+      "lastPropertyId": "5:7300800283925369814",
+      "name": "MergeHistoryEntity",
+      "properties": [
+        {
+          "id": "1:8995986739502594",
+          "name": "id",
+          "type": 6,
+          "flags": 1
+        },
+        {
+          "id": "2:8761882514082289310",
+          "name": "primaryPersonId",
+          "type": 6
+        },
+        {
+          "id": "3:134440975625225929",
+          "name": "primaryCoverPath",
+          "type": 9
+        },
+        {
+          "id": "4:6635309753934872308",
+          "name": "mergedCoverPath",
+          "type": 9
+        },
+        {
+          "id": "5:7300800283925369814",
+          "name": "faceIdsMoved",
+          "type": 9
+        }
+      ],
+      "relations": []
     }
   ],
-  "lastEntityId": "3:7796290994217719466",
+  "lastEntityId": "4:3862452737166899717",
   "lastIndexId": "3:8809940920227643281",
   "lastRelationId": "1:4870057968484322335",
   "lastSequenceId": "0:0",

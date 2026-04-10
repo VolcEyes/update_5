@@ -36,3 +36,12 @@ data class FaceEntity(
     lateinit var image: ToOne<ImageEntity>
     lateinit var person: ToOne<PersonEntity> // NEW: Links this specific face to a master Person
 }
+
+@Entity
+data class MergeHistoryEntity(
+    @Id var id: Long = 0,
+    var primaryPersonId: Long = 0,
+    var primaryCoverPath: String = "", // To display Face 1 in the UI
+    var mergedCoverPath: String = "",  // To display Face 2 in the UI
+    var faceIdsMoved: String = ""      // A comma-separated list of the exact faces we moved
+)

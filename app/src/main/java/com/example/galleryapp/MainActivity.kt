@@ -1,6 +1,7 @@
 package com.example.galleryapp
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.ContentUris
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
@@ -39,6 +40,7 @@ import kotlin.math.sqrt
 
 import android.content.Context
 import android.graphics.ImageDecoder
+import android.widget.ImageView
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -72,6 +74,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvProgressText: TextView
     private lateinit var progressBarHorizontal: ProgressBar
 
+    private lateinit var mergeHistoryBox: Box<MergeHistoryEntity>
+
+// Inside onCreate():
+// mergeHistoryBox = GalleryApp.boxStore.boxFor(MergeHistoryEntity::class.java)
+
     // Safety flag
     private var isProcessing = false
 
@@ -97,6 +104,7 @@ class MainActivity : AppCompatActivity() {
         imageBox = GalleryApp.boxStore.boxFor(ImageEntity::class.java)
         faceBox = GalleryApp.boxStore.boxFor(FaceEntity::class.java)
         personBox = GalleryApp.boxStore.boxFor(PersonEntity::class.java) // Add this line
+        mergeHistoryBox = GalleryApp.boxStore.boxFor(MergeHistoryEntity::class.java)
 
         recyclerView = findViewById(R.id.image_recycler)
         recyclerView.layoutManager = GridLayoutManager(this, 3)
@@ -370,7 +378,7 @@ class MainActivity : AppCompatActivity() {
 
         val facesRecyclerView = view.findViewById<RecyclerView>(R.id.recycler_faces)
         val btnApply = view.findViewById<Button>(R.id.btn_apply)
-
+        val btnViewMergeHistory = view.findViewById<Button>(R.id.btn_view_merge_history)
         // Add this right after you initialize facesRecyclerView and btnApply
         val btnProcessImages = view.findViewById<Button>(R.id.btn_process_images)
         val btnViewTotalFaces = view.findViewById<Button>(R.id.btn_view_total_faces) // NEW BUTTON
@@ -430,6 +438,18 @@ class MainActivity : AppCompatActivity() {
             // you will need to pass `selectedFacesForMerge` into your FaceAdapter and call .notifyDataSetChanged() here.
         }
         facesRecyclerView.adapter = faceAdapter
+
+        btnViewMergeHistory?.setOnClickListener {
+            // Check if the history box is empty before opening
+            if (mergeHistoryBox.isEmpty) {
+                Toast.makeText(this@MainActivity, "No merged profiles to show.", Toast.LENGTH_SHORT).show()
+            } else {
+                showMergeHistoryBottomSheet()
+
+                // Optional: Close the main search sheet so it doesn't stack awkwardly behind the new one
+                // bottomSheetDialog.dismiss()
+            }
+        }
 
         btnViewTotalFaces.setOnClickListener {
             val personId = chosenFace?.person?.targetId
@@ -820,27 +840,109 @@ class MainActivity : AppCompatActivity() {
         val duplicatePerson = personBox.get(duplicatePersonId)
 
         if (primaryPerson != null && duplicatePerson != null) {
-            // Move all faces from the duplicate cluster to the primary cluster
+            // 1. CREATE THE HISTORY RECEIPT
+            // Grab all the IDs of the faces we are about to move
+            val faceIds = duplicatePerson.faces.map { it.id }.joinToString(",")
+
+            val historyRecord = MergeHistoryEntity(
+                primaryPersonId = primaryPersonId,
+                primaryCoverPath = primaryPerson.coverFaceImagePath,
+                mergedCoverPath = duplicatePerson.coverFaceImagePath,
+                faceIdsMoved = faceIds
+            )
+            mergeHistoryBox.put(historyRecord)
+
+            // 2. Move faces (Your existing code)
             for (face in duplicatePerson.faces) {
                 face.person.target = primaryPerson
                 faceBox.put(face)
             }
 
-            // Delete the old, now-empty person profile
+            // 3. Delete the old profile (Your existing code)
             personBox.remove(duplicatePerson)
         }
     }
 
-    // Helper math function to calculate if two faces belong to the same person
-    private fun calculateCosineSimilarity(v1: FloatArray, v2: FloatArray): Float {
-        var dotProduct = 0.0f
-        var normA = 0.0f
-        var normB = 0.0f
-        for (i in v1.indices) {
-            dotProduct += v1[i] * v2[i]
-            normA += v1[i] * v1[i]
-            normB += v2[i] * v2[i]
+    private fun unmergePersons(historyId: Long) {
+        val historyRecord = mergeHistoryBox.get(historyId) ?: return
+
+        // 1. Recreate the person we originally deleted
+        val restoredPerson = PersonEntity(
+            name = "Restored Person",
+            coverFaceImagePath = historyRecord.mergedCoverPath
+        )
+        personBox.put(restoredPerson) // This assigns them a brand new ID
+
+        // 2. Extract the IDs from the receipt and move those specific faces back
+        val faceIdsToMoveBack = historyRecord.faceIdsMoved.split(",").mapNotNull { it.toLongOrNull() }
+
+        for (faceId in faceIdsToMoveBack) {
+            val face = faceBox.get(faceId)
+            if (face != null) {
+                face.person.target = restoredPerson
+                faceBox.put(face)
+            }
         }
-        return if (normA == 0.0f || normB == 0.0f) 0.0f else (dotProduct / (sqrt(normA) * sqrt(normB)))
+
+        // 3. Destroy the history receipt so it disappears from the UI
+        mergeHistoryBox.remove(historyRecord)
+    }
+
+    @SuppressLint("MissingInflatedId")
+    private fun showMergeHistoryBottomSheet() {
+        val bottomSheetDialog = BottomSheetDialog(this)
+        val view = layoutInflater.inflate(R.layout.bottom_sheet_person_faces, null) // You can reuse an existing simple recyclerview layout
+        bottomSheetDialog.setContentView(view)
+
+        // Set the title
+        view.findViewById<TextView>(R.id.tv_title)?.text = "Merged Persons"
+
+        val recyclerView = view.findViewById<RecyclerView>(R.id.recycler_all_faces)
+        recyclerView.layoutManager = LinearLayoutManager(this)
+
+        // Grab all history records
+        val historyList = mergeHistoryBox.all
+
+        if (historyList.isEmpty()) {
+            Toast.makeText(this, "No merged profiles found.", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        // A simple anonymous adapter to handle the green bordered rows
+        val adapter = object : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
+            override fun onCreateViewHolder(parent: android.view.ViewGroup, viewType: Int): RecyclerView.ViewHolder {
+                val rowView = layoutInflater.inflate(R.layout.row_merge_history, parent, false)
+                return object : RecyclerView.ViewHolder(rowView) {}
+            }
+
+            override fun getItemCount() = historyList.size
+
+            override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
+                val history = historyList[position]
+                val ivPrimary = holder.itemView.findViewById<ImageView>(R.id.iv_primary_face)
+                val ivMerged = holder.itemView.findViewById<ImageView>(R.id.iv_merged_face)
+
+                // Load images using Glide or BitmapFactory
+                com.bumptech.glide.Glide.with(this@MainActivity).load(history.primaryCoverPath).into(ivPrimary)
+                com.bumptech.glide.Glide.with(this@MainActivity).load(history.mergedCoverPath).into(ivMerged)
+
+                holder.itemView.setOnClickListener {
+                    // Show an alert dialog to confirm the unmerge when the green border is tapped
+                    android.app.AlertDialog.Builder(this@MainActivity)
+                        .setTitle("Unmerge Faces?")
+                        .setMessage("This will separate these photos back into two distinct people.")
+                        .setPositiveButton("Unmerge") { _, _ ->
+                            unmergePersons(history.id)
+                            Toast.makeText(this@MainActivity, "Successfully Unmerged!", Toast.LENGTH_SHORT).show()
+                            bottomSheetDialog.dismiss()
+                        }
+                        .setNegativeButton("Cancel", null)
+                        .show()
+                }
+            }
+        }
+
+        recyclerView.adapter = adapter
+        bottomSheetDialog.show()
     }
 }

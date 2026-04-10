@@ -5,7 +5,7 @@
   "entities": [
     {
       "id": "1:3810440697939320906",
-      "lastPropertyId": "5:5983159629472776665",
+      "lastPropertyId": "6:3161013148042117669",
       "name": "FaceEntity",
       "properties": [
         {
@@ -38,6 +38,14 @@
           "id": "5:5983159629472776665",
           "name": "faceImagePath",
           "type": 9
+        },
+        {
+          "id": "6:3161013148042117669",
+          "name": "personId",
+          "indexId": "3:8809940920227643281",
+          "type": 11,
+          "flags": 520,
+          "relationTarget": "PersonEntity"
         }
       ],
       "relations": []
@@ -71,10 +79,34 @@
           "targetId": "1:3810440697939320906"
         }
       ]
+    },
+    {
+      "id": "3:7796290994217719466",
+      "lastPropertyId": "3:1098458487823958043",
+      "name": "PersonEntity",
+      "properties": [
+        {
+          "id": "1:5359801579162546648",
+          "name": "id",
+          "type": 6,
+          "flags": 1
+        },
+        {
+          "id": "2:1565727015299531705",
+          "name": "name",
+          "type": 9
+        },
+        {
+          "id": "3:1098458487823958043",
+          "name": "coverFaceImagePath",
+          "type": 9
+        }
+      ],
+      "relations": []
     }
   ],
-  "lastEntityId": "2:2192951856395635762",
-  "lastIndexId": "2:7120295677810774263",
+  "lastEntityId": "3:7796290994217719466",
+  "lastIndexId": "3:8809940920227643281",
   "lastRelationId": "1:4870057968484322335",
   "lastSequenceId": "0:0",
   "modelVersion": 5,
