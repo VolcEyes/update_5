@@ -396,6 +396,7 @@ class MainActivity : AppCompatActivity() {
         // --- NEW SIMPLIFIED LOGIC ---
 
         // 1. Grab all successfully clustered people from the database
+// 1. Grab all successfully clustered people from the database
         val allPersons = personBox.all
         val uniqueFacesToDisplay = ArrayList<FaceEntity>()
 
@@ -404,7 +405,16 @@ class MainActivity : AppCompatActivity() {
             val uniqueImageCount = person.faces.map { it.image.targetId }.distinct().size
 
             if (uniqueImageCount >= 3) {
-                val coverFace = person.faces.firstOrNull()
+
+                // --- THE FIX ---
+                // First, try to find the specific face the user set as the preview
+                var coverFace = person.faces.find { it.faceImagePath == person.coverFaceImagePath }
+
+                // Fallback: If no custom preview is set (or it was deleted), just use the first face
+                if (coverFace == null) {
+                    coverFace = person.faces.firstOrNull()
+                }
+
                 if (coverFace != null) {
                     uniqueFacesToDisplay.add(coverFace)
                 }
@@ -416,29 +426,35 @@ class MainActivity : AppCompatActivity() {
         var chosenFace: FaceEntity? = null
         val selectedFacesForMerge = mutableListOf<FaceEntity>()
 
-        // 1. Pass the selectedFacesForMerge list into the adapter here:
         val faceAdapter = FaceAdapter(
             context = this,
             faces = uniqueFacesToDisplay,
             selectedFaces = selectedFacesForMerge,
             onClick = { selectedFace ->
 
-                chosenFace = selectedFace
-
-                // Handle Multi-Selection
+                // 1. Handle the Selection/Deselection FIRST
                 if (selectedFacesForMerge.contains(selectedFace)) {
+                    // They tapped an already selected face, so remove it
                     selectedFacesForMerge.remove(selectedFace)
                 } else {
+                    // They are selecting a new face
                     if (selectedFacesForMerge.size < 2) {
                         selectedFacesForMerge.add(selectedFace)
                     } else {
+                        // If they tap a 3rd face, replace the 2nd one
                         selectedFacesForMerge[1] = selectedFace
                     }
                 }
 
+                // 2. THE BUG FIX: Safely update chosenFace
+                // Instead of blindly taking whatever was tapped, we take the LAST face
+                // that is currently sitting in the selection list. If the list is empty, it becomes null.
+                chosenFace = selectedFacesForMerge.lastOrNull()
+
+                // 3. Update the Merge Button state
                 btnMergePeople.isEnabled = selectedFacesForMerge.size == 2
 
-                // 2. CRITICAL: Tell the RecyclerView to redraw so the blue border updates!
+                // 4. Redraw the blue rings
                 facesRecyclerView.adapter?.notifyDataSetChanged()
             }
         )
@@ -459,8 +475,8 @@ class MainActivity : AppCompatActivity() {
         btnViewTotalFaces.setOnClickListener {
             val personId = chosenFace?.person?.targetId
             if (personId != null) {
-                showPersonFacesBottomSheet(personId)
-                // Optional: bottomSheetDialog.dismiss() if you want to close the first sheet
+                // Pass the current dialog so we can refresh it later!
+                showPersonFacesBottomSheet(personId, bottomSheetDialog)
             }
         }
 
@@ -628,7 +644,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun showPersonFacesBottomSheet(personId: Long) {
+    private fun showPersonFacesBottomSheet(personId: Long, parentDialog: BottomSheetDialog? = null) {
         val bottomSheetDialog = BottomSheetDialog(this)
         val view = layoutInflater.inflate(R.layout.bottom_sheet_person_faces, null)
         bottomSheetDialog.setContentView(view)
@@ -642,31 +658,38 @@ class MainActivity : AppCompatActivity() {
         val person = personBox.get(personId) ?: return
         val allFacesOfPerson = person.faces.toList()
 
-        // 2. Setup the adapter (reusing your existing FaceAdapter)
+// 1. Create a mutable list specifically for the adapter's visual UI
         var selectedPreviewFace: FaceEntity? = null
+        val selectedPreviewList = mutableListOf<FaceEntity>()
+
+        // 2. Setup the adapter
         val faceAdapter = FaceAdapter(
             context = this,
             faces = allFacesOfPerson,
+            selectedFaces = selectedPreviewList, // <-- Pass the UI list here
             onClick = { selectedFace ->
+
+                // Track the selected face for your "Set Preview" button
                 selectedPreviewFace = selectedFace
                 btnSetPreview.isEnabled = true
+
+                // Update the UI list: Clear previous selections, add the new one
+                selectedPreviewList.clear()
+                selectedPreviewList.add(selectedFace)
+
+                // CRITICAL: Tell the adapter to redraw so the blue ring moves!
+                recyclerView.adapter?.notifyDataSetChanged()
             },
             onLongClick = { faceToDelete ->
-                // Show standard Android confirmation dialog
+                // ... [Keep your exact existing AlertDialog deletion logic here] ...
                 android.app.AlertDialog.Builder(this@MainActivity)
                     .setTitle("Not a face?")
                     .setMessage("Remove this falsely detected image from the database?")
                     .setPositiveButton("Remove") { _, _ ->
-                        // 1. Run the deletion function
                         removeFalsePositiveFace(faceToDelete.id)
-
-                        // 2. Alert the user
                         Toast.makeText(this@MainActivity, "Face removed.", Toast.LENGTH_SHORT).show()
-
-                        // 3. Close and instantly reopen the sheet to refresh the grid visually
                         bottomSheetDialog.dismiss()
 
-                        // Check if the person still exists before reopening (in case it was an empty cluster)
                         val updatedPerson = personBox.get(personId)
                         if (updatedPerson != null && updatedPerson.faces.isNotEmpty()) {
                             showPersonFacesBottomSheet(personId)
@@ -682,7 +705,13 @@ class MainActivity : AppCompatActivity() {
         btnSetPreview.setOnClickListener {
             if (selectedPreviewFace != null) {
                 setCustomCoverFaceForPerson(personId, selectedPreviewFace!!.faceImagePath)
+
+                // Close the detailed faces sheet
                 bottomSheetDialog.dismiss()
+
+                // Close the main search sheet and instantly reopen it to trigger a data refresh!
+                parentDialog?.dismiss()
+                showSearchBottomSheet()
             }
         }
 // ... [Adapter setup code above] ...
