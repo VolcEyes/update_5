@@ -12,7 +12,13 @@
         android:scaleType="centerCrop"
         android:padding="2dp"
         app:shapeAppearanceOverlay="@style/CircleFaceStyle"
-        app:strokeColor="@android:color/transparent"
-        app:strokeWidth="3dp" />
+        app:strokeWidth="0dp" />
+
+    <View
+        android:id="@+id/iv_selection_ring"
+        android:layout_width="72dp"
+        android:layout_height="72dp"
+        android:background="@drawable/bg_blue_ring"
+        android:visibility="gone" />
 
 </FrameLayout>

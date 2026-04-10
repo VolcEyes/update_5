@@ -1,5 +1,6 @@
 package com.example.galleryapp
 
+
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.ContentUris
@@ -690,90 +691,29 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+
+// ...
+
+    @SuppressLint("NotifyDataSetChanged")
     private fun showPersonFacesBottomSheet(personId: Long, parentDialog: BottomSheetDialog? = null) {
         val bottomSheetDialog = BottomSheetDialog(this)
         val view = layoutInflater.inflate(R.layout.bottom_sheet_person_faces, null)
-        bottomSheetDialog.setContentView(view)
 
         val recyclerView = view.findViewById<RecyclerView>(R.id.recycler_all_faces)
         val btnSetPreview = view.findViewById<Button>(R.id.btn_set_preview)
 
         recyclerView.layoutManager = GridLayoutManager(this, 4)
 
-        // 1. Fetch the person and all their grouped faces
-        val person = personBox.get(personId) ?: return
-        val allFacesOfPerson = person.faces.toList()
-
-// 1. Create a mutable list specifically for the adapter's visual UI
-        var selectedPreviewFace: FaceEntity? = null
-        val selectedPreviewList = mutableListOf<FaceEntity>()
-
-        // 2. Setup the adapter
-        val faceAdapter = FaceAdapter(
-            context = this,
-            faces = allFacesOfPerson,
-            selectedFaces = selectedPreviewList, // <-- Pass the UI list here
-            onClick = { selectedFace ->
-
-                // Track the selected face for your "Set Preview" button
-                selectedPreviewFace = selectedFace
-                btnSetPreview.isEnabled = true
-
-                // Update the UI list: Clear previous selections, add the new one
-                selectedPreviewList.clear()
-                selectedPreviewList.add(selectedFace)
-
-                // CRITICAL: Tell the adapter to redraw so the blue ring moves!
-                recyclerView.adapter?.notifyDataSetChanged()
-            },
-            onLongClick = { faceToDelete ->
-                // ... [Keep your exact existing AlertDialog deletion logic here] ...
-                android.app.AlertDialog.Builder(this@MainActivity)
-                    .setTitle("Not a face?")
-                    .setMessage("Remove this falsely detected image from the database?")
-                    .setPositiveButton("Remove") { _, _ ->
-                        removeFalsePositiveFace(faceToDelete.id)
-                        Toast.makeText(this@MainActivity, "Face removed.", Toast.LENGTH_SHORT).show()
-                        bottomSheetDialog.dismiss()
-
-                        val updatedPerson = personBox.get(personId)
-                        if (updatedPerson != null && updatedPerson.faces.isNotEmpty()) {
-                            showPersonFacesBottomSheet(personId)
-                        }
-                    }
-                    .setNegativeButton("Cancel", null)
-                    .show()
-            }
-        )
-        recyclerView.adapter = faceAdapter
-
-        // 3. Handle saving the new cover photo
-        btnSetPreview.setOnClickListener {
-            if (selectedPreviewFace != null) {
-                setCustomCoverFaceForPerson(personId, selectedPreviewFace!!.faceImagePath)
-
-                // Close the detailed faces sheet
-                bottomSheetDialog.dismiss()
-
-                // Close the main search sheet and instantly reopen it to trigger a data refresh!
-                parentDialog?.dismiss()
-                showSearchBottomSheet()
-            }
-        }
-// ... [Adapter setup code above] ...
-
-        // 1. Set content view FIRST
+        // 1. Set content view FIRST so we can measure the layout
         bottomSheetDialog.setContentView(view)
 
-        // 2. Safely find the internal BottomSheet FrameLayout
+        // 2. Safely find the internal BottomSheet FrameLayout and set it to 2/3 height
         val bottomSheet = bottomSheetDialog.findViewById<View>(com.google.android.material.R.id.design_bottom_sheet)
-
         if (bottomSheet != null) {
             val behavior = BottomSheetBehavior.from(bottomSheet)
             val screenHeight = resources.displayMetrics.heightPixels
             val twoThirdsHeight = (screenHeight * 0.85).toInt()
 
-            // 3. Apply the height to the FrameLayout correctly
             val layoutParams = bottomSheet.layoutParams
             layoutParams.height = twoThirdsHeight
             bottomSheet.layoutParams = layoutParams
@@ -782,8 +722,99 @@ class MainActivity : AppCompatActivity() {
             behavior.skipCollapsed = true
         }
 
-        bottomSheetDialog.show()
+        // 3. Launch background thread to validate images
+        lifecycleScope.launch(Dispatchers.IO) {
+            val person = personBox.get(personId) ?: return@launch
 
+            val validFaces = mutableListOf<FaceEntity>()
+            val ghostFaces = mutableListOf<FaceEntity>()
+
+            // Validate each face attached to this person
+            for (face in person.faces) {
+                val image = face.image.target
+                if (image != null && isImageUriValid(image.imageUri)) {
+                    validFaces.add(face)
+                } else {
+                    ghostFaces.add(face)
+                }
+            }
+
+            // Auto-heal: delete ghost faces and their physical files
+            if (ghostFaces.isNotEmpty()) {
+                for (ghost in ghostFaces) {
+                    try { java.io.File(ghost.faceImagePath).delete() } catch(e: Exception){}
+                    faceBox.remove(ghost)
+                    person.faces.remove(ghost) // Unlink from the person
+                }
+                // Save the person entity changes
+                personBox.put(person)
+            }
+
+            // 4. Back to the Main Thread to update the UI
+            withContext(Dispatchers.Main) {
+                // If all photos were deleted, destroy the empty person cluster and close
+                if (validFaces.isEmpty()) {
+                    personBox.remove(person)
+                    bottomSheetDialog.dismiss()
+                    parentDialog?.dismiss()
+                    showSearchBottomSheet() // Refresh search sheet so the empty cluster vanishes
+                    return@withContext
+                }
+
+                // Setup the selection list for the adapter
+                var selectedPreviewFace: FaceEntity? = null
+                val selectedPreviewList = mutableListOf<FaceEntity>()
+
+                val faceAdapter = FaceAdapter(
+                    context = this@MainActivity,
+                    faces = validFaces, // Use only the strictly validated faces
+                    selectedFaces = selectedPreviewList,
+                    onClick = { selectedFace ->
+                        selectedPreviewFace = selectedFace
+                        btnSetPreview.isEnabled = true
+
+                        selectedPreviewList.clear()
+                        selectedPreviewList.add(selectedFace)
+
+                        // CRITICAL: Tell the adapter to redraw so the blue ring moves!
+                        recyclerView.adapter?.notifyDataSetChanged()
+                    },
+                    onLongClick = { faceToDelete ->
+                        android.app.AlertDialog.Builder(this@MainActivity)
+                            .setTitle("Not a face?")
+                            .setMessage("Remove this falsely detected image from the database?")
+                            .setPositiveButton("Remove") { _, _ ->
+                                removeFalsePositiveFace(faceToDelete.id)
+                                Toast.makeText(this@MainActivity, "Face removed.", Toast.LENGTH_SHORT).show()
+                                bottomSheetDialog.dismiss()
+
+                                // Reopen to refresh the list
+                                val updatedPerson = personBox.get(personId)
+                                if (updatedPerson != null && updatedPerson.faces.isNotEmpty()) {
+                                    showPersonFacesBottomSheet(personId, parentDialog)
+                                }
+                            }
+                            .setNegativeButton("Cancel", null)
+                            .show()
+                    }
+                )
+
+                recyclerView.adapter = faceAdapter
+
+                // 5. Handle saving the new cover photo
+                btnSetPreview.setOnClickListener {
+                    if (selectedPreviewFace != null) {
+                        setCustomCoverFaceForPerson(personId, selectedPreviewFace!!.faceImagePath)
+
+                        bottomSheetDialog.dismiss()
+                        parentDialog?.dismiss()
+                        showSearchBottomSheet() // Refresh the main search sheet to show the new cover!
+                    }
+                }
+
+                bottomSheetDialog.show()
+            }
+        }
     }
 
     fun setCustomCoverFaceForPerson(personId: Long, chosenFacePath: String) {
