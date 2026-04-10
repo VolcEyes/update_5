@@ -125,11 +125,14 @@ class MainActivity : AppCompatActivity() {
                 scrfdHelper= ScrfdHelper(this@MainActivity)
                 Log.d("AppDebug", "ML Models Loaded Successfully!")
 
+                // ---> CALL YOUR DEBUG FUNCTION HERE <---
+                // Change 0.62f to whatever value you want to test on this run
+                debugRecalculateClusters(0.58f)
+
                 withContext(Dispatchers.Main) {
                     checkPermissionsAndLoadImages()
                 }
             } catch (e: Exception) {
-                // If there is an issue with the asset files or TFLite, it will print here!
                 Log.e("AppDebug", "CRITICAL ERROR LOADING ML MODELS", e)
             }
         }
@@ -241,7 +244,7 @@ class MainActivity : AppCompatActivity() {
 
         detections.forEach { detection ->
             // Only process confident faces
-            if (detection.score > 0.6f) {
+            if (detection.score > 0.55f) {
                 val keypoints = detection.keypoints
 
                 // 1. Extract all 5 critical keypoints (10 floats) and map them BACK to the original high-res image
@@ -413,30 +416,32 @@ class MainActivity : AppCompatActivity() {
         var chosenFace: FaceEntity? = null
         val selectedFacesForMerge = mutableListOf<FaceEntity>()
 
-        val faceAdapter = FaceAdapter(this, uniqueFacesToDisplay) { selectedFace ->
-            // 1. Keep your existing logic for viewing a single person
-            chosenFace = selectedFace
+        // 1. Pass the selectedFacesForMerge list into the adapter here:
+        val faceAdapter = FaceAdapter(
+            context = this,
+            faces = uniqueFacesToDisplay,
+            selectedFaces = selectedFacesForMerge,
+            onClick = { selectedFace ->
 
-            // 2. Handle Multi-Selection for Merging
-            if (selectedFacesForMerge.contains(selectedFace)) {
-                // If they tap an already selected face, un-select it
-                selectedFacesForMerge.remove(selectedFace)
-            } else {
-                if (selectedFacesForMerge.size < 2) {
-                    // Add to selection if they haven't picked 2 yet
-                    selectedFacesForMerge.add(selectedFace)
+                chosenFace = selectedFace
+
+                // Handle Multi-Selection
+                if (selectedFacesForMerge.contains(selectedFace)) {
+                    selectedFacesForMerge.remove(selectedFace)
                 } else {
-                    // If they tap a 3rd face, replace the 2nd one
-                    selectedFacesForMerge[1] = selectedFace
+                    if (selectedFacesForMerge.size < 2) {
+                        selectedFacesForMerge.add(selectedFace)
+                    } else {
+                        selectedFacesForMerge[1] = selectedFace
+                    }
                 }
+
+                btnMergePeople.isEnabled = selectedFacesForMerge.size == 2
+
+                // 2. CRITICAL: Tell the RecyclerView to redraw so the blue border updates!
+                facesRecyclerView.adapter?.notifyDataSetChanged()
             }
-
-            // 3. Enable the Merge button ONLY when exactly 2 people are selected
-            btnMergePeople.isEnabled = selectedFacesForMerge.size == 2
-
-            // Note: If you want visual highlighting (like a blue border around selected faces),
-            // you will need to pass `selectedFacesForMerge` into your FaceAdapter and call .notifyDataSetChanged() here.
-        }
+        )
         facesRecyclerView.adapter = faceAdapter
 
         btnViewMergeHistory?.setOnClickListener {
@@ -639,10 +644,38 @@ class MainActivity : AppCompatActivity() {
 
         // 2. Setup the adapter (reusing your existing FaceAdapter)
         var selectedPreviewFace: FaceEntity? = null
-        val faceAdapter = FaceAdapter(this, allFacesOfPerson) { selectedFace ->
-            selectedPreviewFace = selectedFace
-            btnSetPreview.isEnabled = true // <-- Change .enabled to .isEnabled
-        }
+        val faceAdapter = FaceAdapter(
+            context = this,
+            faces = allFacesOfPerson,
+            onClick = { selectedFace ->
+                selectedPreviewFace = selectedFace
+                btnSetPreview.isEnabled = true
+            },
+            onLongClick = { faceToDelete ->
+                // Show standard Android confirmation dialog
+                android.app.AlertDialog.Builder(this@MainActivity)
+                    .setTitle("Not a face?")
+                    .setMessage("Remove this falsely detected image from the database?")
+                    .setPositiveButton("Remove") { _, _ ->
+                        // 1. Run the deletion function
+                        removeFalsePositiveFace(faceToDelete.id)
+
+                        // 2. Alert the user
+                        Toast.makeText(this@MainActivity, "Face removed.", Toast.LENGTH_SHORT).show()
+
+                        // 3. Close and instantly reopen the sheet to refresh the grid visually
+                        bottomSheetDialog.dismiss()
+
+                        // Check if the person still exists before reopening (in case it was an empty cluster)
+                        val updatedPerson = personBox.get(personId)
+                        if (updatedPerson != null && updatedPerson.faces.isNotEmpty()) {
+                            showPersonFacesBottomSheet(personId)
+                        }
+                    }
+                    .setNegativeButton("Cancel", null)
+                    .show()
+            }
+        )
         recyclerView.adapter = faceAdapter
 
         // 3. Handle saving the new cover photo
@@ -887,6 +920,89 @@ class MainActivity : AppCompatActivity() {
         // 3. Destroy the history receipt so it disappears from the UI
         mergeHistoryBox.remove(historyRecord)
     }
+
+    /**
+     * DEBUG ONLY: Destroys all current clusters, unassigns faces, and recalculates
+     * everything from scratch using a specific EPS value.
+     */
+    private fun debugRecalculateClusters(testEps: Float) {
+        Log.d("AppDebug", "--- STARTING EPS RECALCULATION: $testEps ---")
+
+        // 1. Erase all existing "People" and their merge histories
+        personBox.removeAll()
+        mergeHistoryBox.removeAll()
+
+        // 2. Fetch all extracted faces and detach them from any person
+        val allFaces = faceBox.all
+        for (face in allFaces) {
+            face.person.target = null // Unassign the person
+        }
+        // Save the unassigned state back to the database in one batch
+        faceBox.put(allFaces)
+
+        Log.d("AppDebug", "Cleared old clusters. Processing ${allFaces.size} faces...")
+
+        // 3. Initialize the clusterer with your test EPS value
+        val clusterer = FaceClusterer(
+            faceBox = faceBox,
+            personBox = personBox,
+            eps = testEps,
+            minPts = 2
+        )
+
+        // 4. Run the clustering loop on every face in the database
+        clusterer.enqueueFacesForClustering(allFaces)
+        clusterer.processClusteringQueue()
+
+        val finalPersonCount = personBox.count()
+        Log.d("AppDebug", "--- RECALCULATION COMPLETE ---")
+        Log.d("AppDebug", "Resulting Unique People: $finalPersonCount")
+
+        // Update the UI on the main thread when finished
+        lifecycleScope.launch(Dispatchers.Main) {
+            Toast.makeText(this@MainActivity, "Debug Clustering Done (eps: $testEps) -> $finalPersonCount people", Toast.LENGTH_LONG).show()
+        }
+    }
+
+
+    /**
+     * Deletes a falsely detected face from the database and internal storage.
+     */
+    private fun removeFalsePositiveFace(faceId: Long) {
+        val face = faceBox.get(faceId) ?: return
+        val person = face.person.target
+
+        // 1. Delete the physical cropped image file from Android storage to free space
+        try {
+            val file = java.io.File(face.faceImagePath)
+            if (file.exists()) {
+                file.delete()
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        // 2. Handle the Person cluster cleanly
+        if (person != null) {
+            // Unlink the face
+            person.faces.remove(face)
+
+            if (person.faces.isEmpty()) {
+                // If that hand was the ONLY thing in this cluster, destroy the empty cluster
+                personBox.remove(person)
+            } else {
+                // If the hand happened to be the cover photo for the person, assign a new cover
+                if (person.coverFaceImagePath == face.faceImagePath) {
+                    person.coverFaceImagePath = person.faces.first().faceImagePath
+                }
+                personBox.put(person) // Save changes
+            }
+        }
+
+        // 3. Finally, delete the Face from the database
+        faceBox.remove(face)
+    }
+
 
     @SuppressLint("MissingInflatedId")
     private fun showMergeHistoryBottomSheet() {
