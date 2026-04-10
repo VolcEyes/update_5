@@ -36,22 +36,31 @@ class FaceAdapter(
             .into(holder.imageView)
 
         // --- 2. VISUAL SELECTION LOGIC ---
+        // --- 2. VISUAL SELECTION LOGIC ---
         val isSelected = selectedFaces.contains(face)
 
         if (isSelected) {
-            // Dim the image slightly and add a blue background/padding to act as a border
-            holder.imageView.alpha = 0.6f
-            holder.imageView.setBackgroundColor(Color.parseColor("#2196F3")) // Blue color
-            holder.imageView.setPadding(8, 8, 8, 8) // 8 pixels of padding to reveal the blue background
+            // Dim the image slightly so the selection is obvious
+            holder.imageView.alpha = 0.7f
 
-            // Note: If you have a specific blue circle ImageView in your XML (like R.id.iv_blue_circle),
-            // you would make it visible here instead: holder.blueCircle.visibility = View.VISIBLE
-        } else {
-            // Reset to normal state
-            holder.imageView.alpha = 1.0f
-            holder.imageView.setBackgroundColor(Color.TRANSPARENT)
+            // Draw the blue ring OVER the top of the image
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                holder.imageView.foreground = context.getDrawable(R.drawable.bg_blue_ring)
+            }
+
+            // Remove any old padding or background hacks
             holder.imageView.setPadding(0, 0, 0, 0)
+            holder.imageView.setBackgroundResource(0)
+
+        } else {
+            // Reset to normal unselected state
+            holder.imageView.alpha = 1.0f
+
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                holder.imageView.foreground = null
+            }
         }
+        // ---------------------------------
         // ---------------------------------
 
         holder.itemView.setOnClickListener {
