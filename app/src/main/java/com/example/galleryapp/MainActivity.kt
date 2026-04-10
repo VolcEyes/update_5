@@ -542,7 +542,7 @@ class MainActivity : AppCompatActivity() {
 
         // 5. Show the Dialog (2/3 height)
         val screenHeight = resources.displayMetrics.heightPixels
-        val twoThirdsHeight = (screenHeight * 0.66).toInt()
+        val twoThirdsHeight = (screenHeight * 0.85).toInt()
         view.layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, twoThirdsHeight)
 
         bottomSheetDialog.setContentView(view)
@@ -663,7 +663,7 @@ class MainActivity : AppCompatActivity() {
         if (bottomSheet != null) {
             val behavior = BottomSheetBehavior.from(bottomSheet)
             val screenHeight = resources.displayMetrics.heightPixels
-            val twoThirdsHeight = (screenHeight * 0.66).toInt()
+            val twoThirdsHeight = (screenHeight * 0.85).toInt()
 
             // 3. Apply the height to the FrameLayout correctly
             val layoutParams = bottomSheet.layoutParams
