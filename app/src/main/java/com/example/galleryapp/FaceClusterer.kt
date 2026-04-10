@@ -7,7 +7,7 @@ class FaceClusterer(
     private val faceBox: Box<FaceEntity>,
     private val personBox: Box<PersonEntity>,
     private val eps: Float = 0.63f,  // Immich defaults to 0.5 for cosine distance
-    private val minPts: Int = 2    // Immich defaults to a minimum of 3 recognized faces
+    private val minPts: Int = 3    // Immich defaults to a minimum of 3 recognized faces
 ) {
     // The staging area for extracted faces that haven't been clustered yet
     private val clusteringQueue = mutableListOf<FaceEntity>()

@@ -28,21 +28,22 @@ class ScrfdHelper(context: Context) {
     )
 
     fun detectFaces(bitmap: Bitmap): List<FaceDetection> {
-        // 1. Calculate ratios to scale bounding boxes/keypoints back to original size later
-        val scaleX = bitmap.width.toFloat() / inputSize
-        val scaleY = bitmap.height.toFloat() / inputSize
+        val letterboxData = applyLetterbox(bitmap, inputSize)
+        val paddedBitmap = letterboxData.paddedBitmap
+        val scale = letterboxData.scale
+        val xOffset = letterboxData.xOffset
+        val yOffset = letterboxData.yOffset
 
-        // 2. Scale and convert image to NCHW Tensor (Similar to FaceNetHelper)
-        val scaledBitmap = bitmap.scale(inputSize, inputSize, false)
-        val floatBuffer = convertBitmapToNchwBuffer(scaledBitmap)
-
+        // 2. Convert padded image to NCHW Buffer and Run Inference
+        val floatBuffer = convertBitmapToNchwBuffer(paddedBitmap)
         val shape = longArrayOf(1, 3, inputSize.toLong(), inputSize.toLong())
         val tensor = OnnxTensor.createTensor(ortEnv, floatBuffer, shape)
 
-        // 3. Run Inference
-        val result = ortSession?.run(mapOf("input.1" to tensor)) // Check actual input name for your SCRFD file!
+        val result = ortSession?.run(mapOf("input.1" to tensor))
 
         val detections = mutableListOf<FaceDetection>()
+
+        /* ... [Keep your exact Tensor parsing and Stride loops here] ... */
 
 // 4. Parse Outputs Dynamically
         // Instead of guessing the index order, we map the tensors based on their actual dimensions.
@@ -113,13 +114,15 @@ class ScrfdHelper(context: Context) {
                             val anchorCenterY = (y * stride).toFloat()
 
                             // 4b. Decode Bounding Box
+                            // ... [Inside the grid loop]
+                            // 4b. Decode Bounding Box (Coordinates on the 640x640 canvas)
                             val bbox = bboxes[anchorIndex]
                             val xmin = anchorCenterX - bbox[0] * stride
                             val ymin = anchorCenterY - bbox[1] * stride
                             val xmax = anchorCenterX + bbox[2] * stride
                             val ymax = anchorCenterY + bbox[3] * stride
 
-                            // 4c. Decode Keypoints
+                            // 4c. Decode Keypoints (Coordinates on the 640x640 canvas)
                             val kpDistances = kps[anchorIndex]
                             val realKeypoints = FloatArray(10)
                             for (i in 0 until 5) {
@@ -127,18 +130,22 @@ class ScrfdHelper(context: Context) {
                                 realKeypoints[(i * 2) + 1] = anchorCenterY + kpDistances[(i * 2) + 1] * stride
                             }
 
-                            // 4d. Scale the coordinates back up to the original uncropped image size
-                            val scaledBbox = floatArrayOf(
-                                xmin * scaleX, ymin * scaleY,
-                                xmax * scaleX, ymax * scaleY
-                            )
+                            // 4d. REVERSE LETTERBOX: Map back to the original uncropped image
+                            val realXMin = (xmin - xOffset) / scale
+                            val realYMin = (ymin - yOffset) / scale
+                            val realXMax = (xmax - xOffset) / scale
+                            val realYMax = (ymax - yOffset) / scale
+
+                            val scaledBbox = floatArrayOf(realXMin, realYMin, realXMax, realYMax)
+
                             val scaledKeypoints = FloatArray(10)
                             for (i in 0 until 10 step 2) {
-                                scaledKeypoints[i] = realKeypoints[i] * scaleX
-                                scaledKeypoints[i+1] = realKeypoints[i+1] * scaleY
+                                scaledKeypoints[i] = (realKeypoints[i] - xOffset) / scale
+                                scaledKeypoints[i+1] = (realKeypoints[i+1] - yOffset) / scale
                             }
 
                             detections.add(FaceDetection(scaledBbox, scaledKeypoints, score))
+                            // ...
                         }
                         anchorIndex++
                     }
@@ -150,13 +157,17 @@ class ScrfdHelper(context: Context) {
         // Because anchors overlap, SCRFD will detect the exact same face multiple times across different strides.
         // You must run a standard NMS function on the `detections` list using an IoU threshold of ~0.4f
         // to keep only the highest scoring box per face before returning the list.
+        // 5. IMPORTANT: Apply Non-Maximum Suppression (NMS) here.
         val finalDetections = applyNMS(detections, iouThreshold = 0.4f)
 
         tensor.close()
         result?.close()
-        scaledBitmap.recycle()
 
-        return detections
+        // FIX: Recycle the new padded canvas instead of the old scaled variable
+        paddedBitmap.recycle()
+
+        return finalDetections
+
     }
 
     private fun convertBitmapToNchwBuffer(bitmap: Bitmap): FloatBuffer {
@@ -237,8 +248,46 @@ class ScrfdHelper(context: Context) {
     }
 
 
-    fun close() {
-        ortSession?.close()
-        // Note: Do not close ortEnv here if OnnxFaceHelper is also using it
+    data class LetterboxResult(
+        val paddedBitmap: Bitmap,
+        val scale: Float,
+        val xOffset: Float,
+        val yOffset: Float
+    )
+
+    /**
+     * Replicates the InsightFace/OpenCV cv2.copyMakeBorder letterbox technique.
+     * Scales the image preserving aspect ratio, then pads it to a perfect square.
+     */
+    private fun applyLetterbox(bitmap: Bitmap, targetSize: Int): LetterboxResult {
+        // 1. Calculate the scale factor to fit the longest edge exactly to targetSize
+        val scale = minOf(
+            targetSize.toFloat() / bitmap.width,
+            targetSize.toFloat() / bitmap.height
+        )
+
+        // 2. Calculate the new dimensions of the image
+        val newWidth = (bitmap.width * scale).toInt().coerceAtLeast(1)
+        val newHeight = (bitmap.height * scale).toInt().coerceAtLeast(1)
+
+        // 3. Calculate offsets to center the scaled image horizontally and vertically
+        val xOffset = (targetSize - newWidth) / 2f
+        val yOffset = (targetSize - newHeight) / 2f
+
+        // 4. Create the target canvas filled with Neural Network Neutral Gray (114, 114, 114)
+        val paddedBitmap = Bitmap.createBitmap(targetSize, targetSize, Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(paddedBitmap)
+        canvas.drawColor(android.graphics.Color.rgb(114, 114, 114))
+
+        // 5. Scale the original image and draw it onto the center of the canvas
+        val scaledOriginal = Bitmap.createScaledBitmap(bitmap, newWidth, newHeight, true)
+        canvas.drawBitmap(scaledOriginal, xOffset, yOffset, null)
+
+        // Clean up the intermediate scaled bitmap to prevent memory leaks
+        if (scaledOriginal !== bitmap) {
+            scaledOriginal.recycle()
+        }
+
+        return LetterboxResult(paddedBitmap, scale, xOffset, yOffset)
     }
 }

@@ -241,7 +241,7 @@ class MainActivity : AppCompatActivity() {
 
         detections.forEach { detection ->
             // Only process confident faces
-            if (detection.score > 0.53f) {
+            if (detection.score > 0.6f) {
                 val keypoints = detection.keypoints
 
                 // 1. Extract all 5 critical keypoints (10 floats) and map them BACK to the original high-res image
@@ -769,7 +769,7 @@ class MainActivity : AppCompatActivity() {
             // 8. Trigger Incremental DBSCAN if we extracted new faces
             if (newFacesToCluster.isNotEmpty()) {
                 // Initialize the clusterer locally on the background thread
-                val clusterer = FaceClusterer(faceBox, personBox, eps = 0.62f, minPts = 2)
+                val clusterer = FaceClusterer(faceBox, personBox, eps = 0.58f, minPts = 3)
 
                 clusterer.enqueueFacesForClustering(newFacesToCluster)
                 clusterer.processClusteringQueue()
@@ -820,8 +820,8 @@ class MainActivity : AppCompatActivity() {
         val clusterer = FaceClusterer(
             faceBox = faceBox,
             personBox = personBox,
-            eps = 0.62f,
-            minPts = 2
+            eps = 0.58f,
+            minPts = 3
         )
 
 // 2. Add your extracted faces to the queue
