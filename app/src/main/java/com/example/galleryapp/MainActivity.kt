@@ -49,6 +49,8 @@ import kotlinx.coroutines.withContext
 
 class MainActivity : AppCompatActivity() {
 
+    private var textClipHelper: TextClipHelper? = null // <-- ADD THIS
+
     private lateinit var progressBar: ProgressBar
 
     // ML Helpers
@@ -78,7 +80,7 @@ class MainActivity : AppCompatActivity() {
     private val mlMutex = Mutex()
 
     // Add these with your other UI Elements
-    private lateinit var progressContainer: LinearLayout
+    private lateinit var progressContainer: View
     private lateinit var tvProgressText: TextView
     private lateinit var progressBarHorizontal: ProgressBar
 
@@ -109,16 +111,72 @@ class MainActivity : AppCompatActivity() {
         searchViewContext = findViewById(R.id.search_view_context)
 
         // Listen for user text input for context search (Prepared for Step 5)
+// Listen for user text input for context search
         searchViewContext.setOnQueryTextListener(object : androidx.appcompat.widget.SearchView.OnQueryTextListener {
             override fun onQueryTextSubmit(query: String?): Boolean {
                 if (!query.isNullOrEmpty()) {
                     Toast.makeText(this@MainActivity, "Searching for: $query", Toast.LENGTH_SHORT).show()
-                    // TODO (Step 5): Convert text to vector and query ObjectBox HNSW
+                    searchViewContext.clearFocus() // Hide the keyboard
+
+                    lifecycleScope.launch(Dispatchers.IO) {
+                        // 1. Convert the user's text into a 512-dimensional vector
+                        val textVector = textClipHelper?.getTextVector(query)
+
+                        if (textVector != null) {
+                            // 2. Perform HNSW Vector Search
+                            // This instantly finds the top 50 closest images based on Cosine Similarity
+                            val maxResults = 50
+                            val queryBuilder = contextImageBox.query()
+                                .nearestNeighbors(ContextImageEntity_.clipVector, textVector, maxResults)
+                                .build()
+
+                            // ObjectBox automatically returns these ordered from closest match to furthest
+                            val results = queryBuilder.find()
+                            queryBuilder.close()
+
+                            // 3. Map the vector database results back to your Image objects
+                            val searchResults = ArrayList<Image>()
+                            for (entity in results) {
+                                // Try to fetch the original date modified if we have it
+                                val originalImage = imageBox.query()
+                                    .equal(ImageEntity_.imageUri, entity.imageUri, io.objectbox.query.QueryBuilder.StringOrder.CASE_INSENSITIVE)
+                                    .build()
+                                    .findFirst()
+
+                                val dateMod = originalImage?.dateModified?.toString() ?: "0"
+                                searchResults.add(Image(entity.imageUri, dateMod))
+                            }
+
+                            // 4. Update the UI exactly ONE time on the Main Thread
+                            withContext(Dispatchers.Main) {
+                                if (searchResults.isEmpty()) {
+                                    Toast.makeText(this@MainActivity, "No matching images found.", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    // Clear the grid and load the search results
+                                    imageList.clear()
+                                    imageList.addAll(searchResults)
+                                    imageAdapter.notifyDataSetChanged()
+                                }
+                            }
+                        } else {
+                            withContext(Dispatchers.Main) {
+                                Toast.makeText(this@MainActivity, "Model is still loading, please try again in a moment.", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
                 }
-                return false
+                return true // Return true to indicate we handled the search submission
             }
 
             override fun onQueryTextChange(newText: String?): Boolean {
+                // Optional: If the user clears the search bar, restore the full gallery
+                if (newText.isNullOrEmpty() && imageList.isNotEmpty()) {
+                    imageList.clear()
+                    imageAdapter.notifyDataSetChanged()
+
+                    // Call your existing load function to bring all images back
+                    loadGalleryImages()
+                }
                 return false
             }
         })
@@ -152,6 +210,7 @@ class MainActivity : AppCompatActivity() {
                 faceNetHelper = OnnxFaceHelper(this@MainActivity)
                 scrfdHelper= ScrfdHelper(this@MainActivity)
                 mobileClipHelper = MobileClipHelper(this@MainActivity) // <-- ADD THIS
+                textClipHelper = TextClipHelper(this@MainActivity) // <-- ADD THIS
                 Log.d("AppDebug", "ML Models Loaded Successfully!")
 
                 // ---> CALL YOUR DEBUG FUNCTION HERE <---
@@ -379,7 +438,8 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         faceNetHelper?.close()
-        mobileClipHelper?.close() // <-- ADD THIS
+        mobileClipHelper?.close()
+        textClipHelper?.close() // <-- ADD THIS
     }
 
     //SEARCH MENU

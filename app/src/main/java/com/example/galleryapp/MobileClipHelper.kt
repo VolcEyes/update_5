@@ -5,6 +5,8 @@ import android.graphics.Bitmap
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
+import java.io.File
+import java.io.FileOutputStream
 import java.nio.FloatBuffer
 import java.util.Collections
 
@@ -17,10 +19,18 @@ class MobileClipHelper(context: Context) {
             ortEnv = OrtEnvironment.getEnvironment()
             val options = OrtSession.SessionOptions()
 
-            // Loading the optimized ORT vision model
-            val assetManager = context.assets
-            val modelBytes = assetManager.open("vision_model.ort").readBytes() // <-- UPDATED HERE
-            ortSession = ortEnv?.createSession(modelBytes, options)
+            // Safe Loading: Copy from assets to internal storage using streams
+            val modelFile = File(context.filesDir, "vision_model.ort")
+            if (!modelFile.exists()) {
+                context.assets.open("vision_model.ort").use { inputStream ->
+                    FileOutputStream(modelFile).use { outputStream ->
+                        inputStream.copyTo(outputStream)
+                    }
+                }
+            }
+
+            // Load the model using its absolute path
+            ortSession = ortEnv?.createSession(modelFile.absolutePath, options)
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -30,17 +40,14 @@ class MobileClipHelper(context: Context) {
         if (ortSession == null || ortEnv == null) return null
 
         return try {
-            // Standard CLIP models expect 224x224 RGB inputs
             val resizedBitmap = Bitmap.createScaledBitmap(bitmap, 224, 224, true)
             val floatBuffer = preprocessImage(resizedBitmap)
 
-            // Shape: [batch_size, channels, height, width] -> [1, 3, 224, 224]
             val inputTensor = OnnxTensor.createTensor(ortEnv, floatBuffer, longArrayOf(1, 3, 224, 224))
 
             val inputName = ortSession?.inputNames?.iterator()?.next() ?: "image"
             val results = ortSession?.run(Collections.singletonMap(inputName, inputTensor))
 
-            // Extract the 512-dimensional FloatArray
             val output = results?.get(0)?.value as Array<FloatArray>
 
             inputTensor.close()
