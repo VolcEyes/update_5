@@ -121,31 +121,31 @@ class MainActivity : AppCompatActivity() {
                     lifecycleScope.launch(Dispatchers.IO) {
                         // 1. Convert the user's text into a 512-dimensional vector
                         // 1. Get Text Vector
+                        // 1. Get Text Vector
                         val textVector = textClipHelper?.getTextVector(query)
 
                         if (textVector != null) {
                             // 2. Perform HNSW Vector Search
-                            val maxResults = 50
+                            // Only ask ObjectBox for exactly the number of results you want to display (e.g., 30)
+                            val maxResults = 30
                             val queryBuilder = contextImageBox.query()
                                 .nearestNeighbors(ContextImageEntity_.clipVector, textVector, maxResults)
                                 .build()
 
-                            // Use findWithScores() instead of find() to get the math data
                             val resultsWithScores = queryBuilder.findWithScores()
                             queryBuilder.close()
 
                             val searchResults = ArrayList<Image>()
 
-                            // Set a threshold (e.g., 20% similarity).
-                            // Adjust this up or down based on how strict you want the search to be!
-                            val similarityThreshold = 0.20
-
-                            // 3. Filter and Map Results
+                            // 3. Map Results directly (No strict threshold filtering)
                             for (result in resultsWithScores) {
-                                // Convert ObjectBox Cosine Distance to standard Cosine Similarity
                                 val cosineSimilarity = 1.0 - result.score
 
-                                if (cosineSimilarity > similarityThreshold) {
+                                // LOG THE SCORES: Check Logcat to see the actual math values!
+                                android.util.Log.d("CLIP_SEARCH", "Image: ${result.get().imageUri} | Similarity: $cosineSimilarity")
+
+                                // Optional: Only filter out EXTREMELY low scores (e.g., below 0.10) to prevent absolute garbage
+                                if (cosineSimilarity > 0.10) {
                                     val entity = result.get()
 
                                     val originalImage = imageBox.query()
@@ -157,6 +157,20 @@ class MainActivity : AppCompatActivity() {
                                     searchResults.add(Image(entity.imageUri, dateMod))
                                 }
                             }
+
+                            // 4. Update UI
+                            withContext(Dispatchers.Main) {
+                                if (searchResults.isEmpty()) {
+                                    Toast.makeText(this@MainActivity, "No matching images found.", Toast.LENGTH_SHORT).show()
+                                    imageList.clear()
+                                    imageAdapter.notifyDataSetChanged()
+                                } else {
+                                    imageList.clear()
+                                    imageList.addAll(searchResults)
+                                    imageAdapter.notifyDataSetChanged()
+                                }
+                            }
+                        
 
                             // 4. Update UI
                             withContext(Dispatchers.Main) {
