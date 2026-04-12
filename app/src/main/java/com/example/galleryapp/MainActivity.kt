@@ -820,8 +820,7 @@ class MainActivity : AppCompatActivity() {
 
                 if (existing == null) {
                     val uri = Uri.parse(uriString)
-                    val bitmap = loadBitmapFromUri(this@MainActivity, uri)
-
+                    val bitmap = loadThumbnailForClip(uri)
                     if (bitmap != null) {
                         mlMutex.withLock {
                             // Extract Apple MobileCLIP vector
@@ -852,6 +851,51 @@ class MainActivity : AppCompatActivity() {
                     progressContainer.visibility = View.GONE
                 }, 3000)
             }
+        }
+    }
+
+    private fun loadThumbnailForClip(uri: Uri): Bitmap? {
+        return try {
+            val options = BitmapFactory.Options()
+            options.inJustDecodeBounds = true // Check dimensions without loading into RAM
+            contentResolver.openInputStream(uri)?.use { inputStream ->
+                BitmapFactory.decodeStream(inputStream, null, options)
+            }
+
+            // MobileCLIP only needs 224x224. We load at max 512x512 to save massive amounts of RAM
+            val reqWidth = 512
+            val reqHeight = 512
+            var inSampleSize = 1
+
+            if (options.outHeight > reqHeight || options.outWidth > reqWidth) {
+                val halfHeight: Int = options.outHeight / 2
+                val halfWidth: Int = options.outWidth / 2
+                while (halfHeight / inSampleSize >= reqHeight && halfWidth / inSampleSize >= reqWidth) {
+                    inSampleSize *= 2
+                }
+            }
+
+            // Now load the actual heavily down-sampled image
+            options.inJustDecodeBounds = false
+            options.inSampleSize = inSampleSize
+            options.inPreferredConfig = Bitmap.Config.ARGB_8888 // Required by ONNX
+
+            var bitmap = contentResolver.openInputStream(uri)?.use { inputStream ->
+                BitmapFactory.decodeStream(inputStream, null, options)
+            }
+
+            // Ensure proper format for ONNX
+            if (bitmap != null && bitmap.config != Bitmap.Config.ARGB_8888) {
+                val convertedBitmap = bitmap.copy(Bitmap.Config.ARGB_8888, true)
+                bitmap.recycle()
+                bitmap = convertedBitmap
+            }
+
+            return bitmap
+        } catch (e: Throwable) {
+            // Catching Throwable instead of Exception catches silent OutOfMemoryErrors!
+            e.printStackTrace()
+            null
         }
     }
 // ...

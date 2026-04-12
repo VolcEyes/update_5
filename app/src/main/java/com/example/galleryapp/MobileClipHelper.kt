@@ -2,6 +2,7 @@ package com.example.galleryapp
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.util.Log
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
@@ -19,9 +20,12 @@ class MobileClipHelper(context: Context) {
             ortEnv = OrtEnvironment.getEnvironment()
             val options = OrtSession.SessionOptions()
 
-            // Safe Loading: Copy from assets to internal storage using streams
             val modelFile = File(context.filesDir, "vision_model.ort")
-            if (!modelFile.exists()) {
+
+            // FIX 1: If the file exists but is suspiciously small (< 1MB), it's corrupted from a crash.
+            // We force it to overwrite.
+            if (!modelFile.exists() || modelFile.length() < 1000000L) {
+                Log.d("MobileClipHelper", "Extracting vision_model.ort from assets...")
                 context.assets.open("vision_model.ort").use { inputStream ->
                     FileOutputStream(modelFile).use { outputStream ->
                         inputStream.copyTo(outputStream)
@@ -29,10 +33,10 @@ class MobileClipHelper(context: Context) {
                 }
             }
 
-            // Load the model using its absolute path
             ortSession = ortEnv?.createSession(modelFile.absolutePath, options)
+            Log.d("MobileClipHelper", "Vision Model loaded successfully!")
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e("MobileClipHelper", "Failed to initialize vision model", e)
         }
     }
 
@@ -40,10 +44,12 @@ class MobileClipHelper(context: Context) {
         if (ortSession == null || ortEnv == null) return null
 
         return try {
-            val resizedBitmap = Bitmap.createScaledBitmap(bitmap, 224, 224, true)
+            // FIX 2: Apple MobileCLIP specifically requires 256x256 resolution
+            val resizedBitmap = Bitmap.createScaledBitmap(bitmap, 256, 256, true)
             val floatBuffer = preprocessImage(resizedBitmap)
 
-            val inputTensor = OnnxTensor.createTensor(ortEnv, floatBuffer, longArrayOf(1, 3, 224, 224))
+            // Update tensor shape to match 256x256
+            val inputTensor = OnnxTensor.createTensor(ortEnv, floatBuffer, longArrayOf(1, 3, 256, 256))
 
             val inputName = ortSession?.inputNames?.iterator()?.next() ?: "image"
             val results = ortSession?.run(Collections.singletonMap(inputName, inputTensor))
@@ -55,7 +61,8 @@ class MobileClipHelper(context: Context) {
 
             output[0]
         } catch (e: Exception) {
-            e.printStackTrace()
+            // FIX 3: Print the exact error to Logcat instead of failing silently!
+            Log.e("MobileClipHelper", "Inference Failed during getImageVector", e)
             null
         }
     }
