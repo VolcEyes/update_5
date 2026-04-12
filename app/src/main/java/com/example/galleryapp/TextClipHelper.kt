@@ -59,7 +59,7 @@ class TextClipHelper(context: Context) {
             inputTensor.close()
             results?.close()
 
-            output[0]
+            return output[0]
         } catch (e: Exception) {
             e.printStackTrace()
             null

@@ -59,7 +59,7 @@ class MobileClipHelper(context: Context) {
             inputTensor.close()
             results?.close()
 
-            output[0]
+            return output[0]
         } catch (e: Exception) {
             // FIX 3: Print the exact error to Logcat instead of failing silently!
             Log.e("MobileClipHelper", "Inference Failed during getImageVector", e)
