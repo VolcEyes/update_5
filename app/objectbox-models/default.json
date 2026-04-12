@@ -137,10 +137,36 @@
         }
       ],
       "relations": []
+    },
+    {
+      "id": "5:2489116273842450908",
+      "lastPropertyId": "3:5853204769890383419",
+      "name": "ContextImageEntity",
+      "properties": [
+        {
+          "id": "1:170790533098731482",
+          "name": "id",
+          "type": 6,
+          "flags": 1
+        },
+        {
+          "id": "2:8661140975373228726",
+          "name": "imageUri",
+          "type": 9
+        },
+        {
+          "id": "3:5853204769890383419",
+          "name": "clipVector",
+          "indexId": "4:2786759384332323755",
+          "type": 28,
+          "flags": 8
+        }
+      ],
+      "relations": []
     }
   ],
-  "lastEntityId": "4:3862452737166899717",
-  "lastIndexId": "3:8809940920227643281",
+  "lastEntityId": "5:2489116273842450908",
+  "lastIndexId": "4:2786759384332323755",
   "lastRelationId": "1:4870057968484322335",
   "lastSequenceId": "0:0",
   "modelVersion": 5,

@@ -99,6 +99,14 @@
                 android:text="Start Scanning" />
         </LinearLayout>
 
+        <Button
+            android:id="@+id/btn_scan_context"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:backgroundTint="#2196F3"
+            android:textColor="@android:color/white"
+            android:text="Scan Context (MobileCLIP)" />
     </LinearLayout>
 
 </LinearLayout>

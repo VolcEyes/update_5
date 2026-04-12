@@ -7,6 +7,18 @@ import io.objectbox.annotation.Id
 import io.objectbox.relation.ToMany
 import io.objectbox.relation.ToOne
 
+
+@Entity
+data class ContextImageEntity(
+    @Id var id: Long = 0,
+    var imageUri: String = "",
+
+    // MobileCLIP outputs a 512-dimensional vector.
+    // @HnswIndex tells ObjectBox to build a high-performance vector search index!
+    @HnswIndex(dimensions = 512)
+    var clipVector: FloatArray? = null
+)
+
 @Entity
 data class ImageEntity(
     @Id var id: Long = 0,

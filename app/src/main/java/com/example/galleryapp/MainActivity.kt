@@ -55,13 +55,20 @@ class MainActivity : AppCompatActivity() {
     //private var faceNetHelper: FaceNetHelper? = null
     private var faceNetHelper: OnnxFaceHelper? = null
 
+    private var mobileClipHelper: MobileClipHelper? = null // <-- ADD THIS
+
     // Database Boxes
     private lateinit var imageBox: Box<ImageEntity>
     private lateinit var faceBox: Box<FaceEntity>
 
+    private lateinit var contextImageBox: Box<ContextImageEntity> // <-- ADD THIS
+
     private lateinit var personBox: Box<PersonEntity> // Add this line
     // UI Elements
+
+    private lateinit var searchViewContext: androidx.appcompat.widget.SearchView // <-- ADD THIS
     private lateinit var recyclerView: RecyclerView
+
     private lateinit var imageAdapter: ImageAdapter
 
     private var scrfdHelper: ScrfdHelper? = null
@@ -80,6 +87,8 @@ class MainActivity : AppCompatActivity() {
 // Inside onCreate():
 // mergeHistoryBox = GalleryApp.boxStore.boxFor(MergeHistoryEntity::class.java)
 
+
+
     // Safety flag
     private var isProcessing = false
 
@@ -97,6 +106,22 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        searchViewContext = findViewById(R.id.search_view_context)
+
+        // Listen for user text input for context search (Prepared for Step 5)
+        searchViewContext.setOnQueryTextListener(object : androidx.appcompat.widget.SearchView.OnQueryTextListener {
+            override fun onQueryTextSubmit(query: String?): Boolean {
+                if (!query.isNullOrEmpty()) {
+                    Toast.makeText(this@MainActivity, "Searching for: $query", Toast.LENGTH_SHORT).show()
+                    // TODO (Step 5): Convert text to vector and query ObjectBox HNSW
+                }
+                return false
+            }
+
+            override fun onQueryTextChange(newText: String?): Boolean {
+                return false
+            }
+        })
 
         progressContainer = findViewById(R.id.progress_container)
         tvProgressText = findViewById(R.id.tv_progress_text)
@@ -106,6 +131,8 @@ class MainActivity : AppCompatActivity() {
         faceBox = GalleryApp.boxStore.boxFor(FaceEntity::class.java)
         personBox = GalleryApp.boxStore.boxFor(PersonEntity::class.java) // Add this line
         mergeHistoryBox = GalleryApp.boxStore.boxFor(MergeHistoryEntity::class.java)
+
+        contextImageBox = GalleryApp.boxStore.boxFor(ContextImageEntity::class.java)
 
         recyclerView = findViewById(R.id.image_recycler)
         recyclerView.layoutManager = GridLayoutManager(this, 3)
@@ -124,6 +151,7 @@ class MainActivity : AppCompatActivity() {
                 Log.d("AppDebug", "Starting ML Models...")
                 faceNetHelper = OnnxFaceHelper(this@MainActivity)
                 scrfdHelper= ScrfdHelper(this@MainActivity)
+                mobileClipHelper = MobileClipHelper(this@MainActivity) // <-- ADD THIS
                 Log.d("AppDebug", "ML Models Loaded Successfully!")
 
                 // ---> CALL YOUR DEBUG FUNCTION HERE <---
@@ -350,8 +378,8 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        // Clean up ML resources to prevent memory leaks when the activity dies
         faceNetHelper?.close()
+        mobileClipHelper?.close() // <-- ADD THIS
     }
 
     //SEARCH MENU
@@ -385,11 +413,18 @@ class MainActivity : AppCompatActivity() {
         val btnViewMergeHistory = view.findViewById<Button>(R.id.btn_view_merge_history)
         // Add this right after you initialize facesRecyclerView and btnApply
         val btnProcessImages = view.findViewById<Button>(R.id.btn_process_images)
-        val btnViewTotalFaces = view.findViewById<Button>(R.id.btn_view_total_faces) // NEW BUTTON
+
+        val btnViewTotalFaces = view.findViewById<Button>(R.id.btn_view_total_faces)
+        val btnScanContext = view.findViewById<Button>(R.id.btn_scan_context) // <-- ADD THIS
 
         btnProcessImages.setOnClickListener {
             startImageProcessing()
             bottomSheetDialog.dismiss() // Close the sheet so they can see the progress bar!
+        }
+
+        btnScanContext.setOnClickListener {
+            startContextScan()
+            bottomSheetDialog.dismiss()
         }
 
         facesRecyclerView.layoutManager = GridLayoutManager(this, 4)
@@ -691,7 +726,74 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun startContextScan() {
+        if (isProcessing) {
+            Toast.makeText(this, "Already processing...", Toast.LENGTH_SHORT).show()
+            return
+        }
 
+        isProcessing = true
+        progressContainer.visibility = View.VISIBLE
+
+        lifecycleScope.launch(Dispatchers.IO) {
+            val totalImages = imageList.size
+            var processedCount = 0
+
+            withContext(Dispatchers.Main) {
+                progressBarHorizontal.max = totalImages
+                progressBarHorizontal.progress = 0
+                tvProgressText.text = "Contextualizing 0 / $totalImages images"
+            }
+
+            for (image in imageList) {
+                val uriString = image.imagePath
+
+// Skip if this image already has a context vector in the DB
+                val existing = contextImageBox.query()
+                    .equal(
+                        ContextImageEntity_.imageUri,
+                        uriString,
+                        io.objectbox.query.QueryBuilder.StringOrder.CASE_INSENSITIVE
+                    )
+                    .build()
+                    .findFirst()
+
+                if (existing == null) {
+                    val uri = Uri.parse(uriString)
+                    val bitmap = loadBitmapFromUri(this@MainActivity, uri)
+
+                    if (bitmap != null) {
+                        mlMutex.withLock {
+                            // Extract Apple MobileCLIP vector
+                            val vector = mobileClipHelper?.getImageVector(bitmap)
+                            if (vector != null) {
+                                val entity = ContextImageEntity(
+                                    imageUri = uriString,
+                                    clipVector = vector
+                                )
+                                contextImageBox.put(entity)
+                            }
+                        }
+                        bitmap.recycle()
+                    }
+                }
+
+                processedCount++
+                withContext(Dispatchers.Main) {
+                    progressBarHorizontal.progress = processedCount
+                    tvProgressText.text = "Contextualizing $processedCount / $totalImages images"
+                }
+            }
+
+            withContext(Dispatchers.Main) {
+                isProcessing = false
+                Toast.makeText(this@MainActivity, "Context Scan Complete!", Toast.LENGTH_LONG).show()
+                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                    progressContainer.visibility = View.GONE
+                }, 3000)
+            }
+        }
+    }
 // ...
 
     @SuppressLint("NotifyDataSetChanged")
